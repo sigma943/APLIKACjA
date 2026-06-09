@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+:root {
+  --pks-initial-bg: #000000;
+  --pks-loading-text: #020617;
+  background: var(--pks-initial-bg);
+  color: var(--pks-loading-text);
+}
+
+html,
+body {
+  min-height: 100%;
+  background: var(--pks-initial-bg);
+}
+
+.pks-loading-screen {
+  background: var(--pks-initial-bg) !important;
+  color: var(--pks-loading-text, #020617) !important;
+}
+
+.pks-loading-screen * {
+  color: inherit;
+}
+
+.pks-loading-screen .pks-loading-label {
+  color: inherit !important;
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.22),
+    0 8px 26px rgba(0, 0, 0, 0.24);
+}
+
+.pks-map-loading-screen {
+  background: var(--pks-initial-bg, #05070b);
+  color: var(--pks-loading-text, #020617);
+}
+
+.pks-map-loading-label {
+  color: var(--pks-loading-text, #020617);
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.18),
+    0 10px 28px rgba(0, 0, 0, 0.22);
+}
+
+.pks-map-loading-spinner {
+  border-color: color-mix(in srgb, var(--pks-loading-text, #020617) 18%, transparent);
+  border-top-color: #14b8a6;
+  box-shadow: 0 0 28px rgba(20, 184, 166, 0.18);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-pks-theme^="dark"]) .pks-loading-screen .pks-loading-label {
+    text-shadow: none;
+  }
+
+  :root:not([data-pks-theme^="dark"]) .pks-map-loading-label {
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.65);
+  }
+}
+
+/* Leaflet overrides for Geometric Balance theme */
+.leaflet-popup-content-wrapper {
+  padding: 0 !important;
+  border-radius: 0.5rem !important;
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1) !important;
+  border: 1px solid #e2e8f0 !important;
+}
+.leaflet-popup-content {
+  margin: 0 !important;
+  padding: 12px !important;
+}
+.leaflet-container {
+  background: #e2e8f0 !important; /* var(--border) from theme / map-container bg */
+}
+.leaflet-popup-tip-container {
+  margin-top: -1px; /* Align perfectly with wrapper */
+}
+
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 20px);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .custom-scrollbar-horizontal::-webkit-scrollbar {
+    height: 4px;
+    width: 4px;
+  }
+
+  .custom-scrollbar-horizontal::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 10px;
+  }
+
+  .custom-scrollbar-horizontal::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+  }
+
+  .custom-scrollbar-horizontal::-webkit-scrollbar-thumb:hover {
+    background: rgba(45, 212, 191, 0.5);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0.5;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* MKS Bus Marker Smooth Transitions */
+.mks-bus-marker {
+  background: transparent !important;
+  border: 0 !important;
+}

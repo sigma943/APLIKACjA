@@ -1,0 +1,8 @@
+{
+  "name": "Podkarpacki Rozkład Jazdy",
+  "description": "Nowoczesna, interaktywna tablica odjazdów autobusów i pociągów na Podkarpaciu z dynamicznym rozkładem jazdy na żywo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

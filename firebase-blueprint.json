@@ -1,0 +1,73 @@
+{
+  "entities": {
+    "UserPreference": {
+      "title": "User Preference",
+      "description": "User specific application settings",
+      "type": "object",
+      "properties": {
+        "mks_filter": {
+          "type": "string",
+          "description": "Bus line filter"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["updatedAt"]
+    },
+    "Device": {
+      "title": "Registered Device",
+      "description": "Represents an anonymous user's device",
+      "type": "object",
+      "properties": {
+        "deviceInfo": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "admin", "user"]
+        },
+        "firstLogin": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "banned"]
+        },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "canBan": { "type": "boolean" },
+            "canViewList": { "type": "boolean" },
+            "canChangeRoles": { "type": "boolean" }
+          }
+        },
+        "banDetails": {
+          "type": "object",
+          "properties": {
+            "expiresAt": { "type": "string", "format": "date-time" },
+            "reason": { "type": "string" },
+            "gifUrl": { "type": "string" }
+          }
+        }
+      },
+      "required": ["deviceInfo", "role", "firstLogin", "status"]
+    }
+  },
+  "firestore": {
+    "users/{userId}/preferences/filters": {
+      "schema": {
+        "$ref": "UserPreference"
+      },
+      "description": "User specific app filters"
+    },
+    "devices/{deviceId}": {
+      "schema": {
+        "$ref": "Device"
+      },
+      "description": "Information about devices and their bans/roles"
+    }
+  }
+}

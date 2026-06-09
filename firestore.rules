@@ -1,0 +1,460 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(uid) { return isSignedIn() && request.auth.uid == uid; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // devices/{id} accepts auth UIDs and legacy guest_* ids.
+    function isValidDeviceDocId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && !id.matches('.*[/].*');
+    }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    function callerDevicePath() {
+      return /databases/$(database)/documents/devices/$(request.auth.uid);
+    }
+
+    function callerDeviceExists() {
+      return isSignedIn() && exists(callerDevicePath());
+    }
+
+    function callerDeviceData() {
+      return get(callerDevicePath()).data;
+    }
+
+    function isValidUserPreference(data) {
+      return data.keys().hasAll(['updatedAt']) &&
+             data.keys().size() <= 2 &&
+             (data.keys().hasAny(['mks_filter']) ? (data.mks_filter is string && data.mks_filter.size() <= 100) : true) &&
+             data.updatedAt == request.time;
+    }
+
+    match /users/{userId}/preferences/{docId} {
+      allow read: if isOwner(userId) && isValidId(userId) && isValidId(docId);
+      allow create: if isOwner(userId) && isValidId(userId) && isValidId(docId) &&
+                        isValidUserPreference(incoming());
+      allow update: if isOwner(userId) && isValidId(userId) && isValidId(docId) &&
+                        isValidUserPreference(incoming()) &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['mks_filter', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(userId) && isValidId(docId);
+    }
+
+    function isCallerOwner() {
+      return callerDeviceExists() && callerDeviceData().role == 'owner';
+    }
+
+    function hasAdminPermFromData(data, perm) {
+      let perms = data.permissions;
+      let modern = perms == null ? false : perms.get(perm, false) == true;
+      let legacy = perms == null ? false :
+                   perm == 'canBan' ? perms.get('ban', false) == true :
+                   perm == 'canViewList' ? (perms.get('monitor', false) == true || perms.get('canViewList', false) == true) :
+                   perm == 'canChangeRoles' ? perms.get('canChangeRoles', false) == true :
+                   false;
+
+      return data.role == 'admin' && perms != null && (modern || legacy);
+    }
+
+    function hasAdminPerm(perm) {
+      return callerDeviceExists() && hasAdminPermFromData(callerDeviceData(), perm);
+    }
+
+    function canListDevices() {
+      return callerDeviceExists() && callerDeviceData().role in ['owner', 'admin'];
+    }
+
+    function canReadGlobalAdminSettings() {
+      return isCallerOwner() || hasAdminPerm('globalSettings') || hasAdminPerm('globalSettingsEdit');
+    }
+
+    function canWriteGlobalAdminSettings() {
+      return isCallerOwner() || hasAdminPerm('globalSettingsEdit');
+    }
+
+    function autoBanUnverifiedEnabled() {
+      return exists(/databases/$(database)/documents/admin_settings/security) &&
+             get(/databases/$(database)/documents/admin_settings/security).data.autoBan == true;
+    }
+
+    function hasAutoBanDetails(data) {
+      return data.banDetails is map &&
+             data.banDetails.get('silent', false) == true &&
+             data.banDetails.get('autoBan', false) == true &&
+             data.banDetails.get('expiresAt', 'x') == '' &&
+             data.banDetails.get('reason', '') is string &&
+             data.banDetails.get('reason', '').size() > 0 &&
+             data.banDetails.get('reason', '').size() <= 160;
+    }
+
+    function incomingPermEnabled(key) {
+      return incoming().permissions is map && incoming().permissions.get(key, false) == true;
+    }
+
+    function existingPermEnabled(key) {
+      return existing().permissions is map && existing().permissions.get(key, false) == true;
+    }
+
+    function callerPermEnabled(key) {
+      let perms = callerDeviceData().permissions;
+      return perms is map && (
+        perms.get(key, false) == true ||
+        (key == 'canBan' && perms.get('ban', false) == true) ||
+        (key == 'canViewList' && perms.get('monitor', false) == true)
+      );
+    }
+
+    function incomingPermissionsKnown() {
+      return incoming().permissions is map &&
+             incoming().permissions.keys().hasOnly([
+               'monitor',
+               'shield',
+               'users',
+               'group',
+               'logs',
+               'ban',
+               'canChangeRoles',
+               'disableMap',
+               'disableStops',
+               'globalSettings',
+               'globalSettingsEdit',
+               'canBan',
+               'canViewList'
+             ]);
+    }
+
+    function incomingPermWithinCaller(key) {
+      return !incomingPermEnabled(key) || callerPermEnabled(key);
+    }
+
+    function adminPermissionGrantAllowed() {
+      return isCallerOwner() ||
+             (
+               incoming().role != 'owner' &&
+               !incomingPermEnabled('disableMap') &&
+               !incomingPermEnabled('disableStops') &&
+               incomingPermWithinCaller('shield') &&
+               incomingPermWithinCaller('users') &&
+               incomingPermWithinCaller('group') &&
+               incomingPermWithinCaller('logs') &&
+               incomingPermWithinCaller('ban') &&
+               incomingPermWithinCaller('canBan') &&
+               incomingPermWithinCaller('canChangeRoles') &&
+               incomingPermWithinCaller('globalSettings') &&
+               incomingPermWithinCaller('globalSettingsEdit')
+             );
+    }
+
+    function userPermissionsAreSafe(data) {
+      return data.permissions is map &&
+             data.permissions.keys().hasOnly([
+               'monitor',
+               'shield',
+               'users',
+               'group',
+               'logs',
+               'ban',
+               'canChangeRoles',
+               'disableMap',
+               'disableStops',
+               'globalSettings',
+               'globalSettingsEdit',
+               'canBan',
+               'canViewList'
+             ]) &&
+             data.permissions.get('monitor', false) != true &&
+             data.permissions.get('shield', false) != true &&
+             data.permissions.get('users', false) != true &&
+             data.permissions.get('group', false) != true &&
+             data.permissions.get('logs', false) != true &&
+             data.permissions.get('ban', false) != true &&
+             data.permissions.get('canChangeRoles', false) != true &&
+             data.permissions.get('globalSettings', false) != true &&
+             data.permissions.get('globalSettingsEdit', false) != true &&
+             data.permissions.get('canBan', false) != true &&
+             data.permissions.get('canViewList', false) != true;
+    }
+
+    function userInstallationCreateAllowed(data) {
+      return data.role == 'user' &&
+             (!(data.verified is bool) || data.verified == false) &&
+             userPermissionsAreSafe(data) &&
+             (
+               !(data.status is string) ||
+               (data.status == 'active' && !autoBanUnverifiedEnabled()) ||
+               (data.status == 'banned' && hasAutoBanDetails(data))
+             );
+    }
+
+    function userInstallationUpdateAllowed(data) {
+      return callerDeviceExists() &&
+             callerDeviceData().role == 'user' &&
+             data.role == 'user' &&
+             (!(data.verified is bool) || data.verified == false) &&
+             userPermissionsAreSafe(data) &&
+             (
+               !(data.status is string) ||
+               data.status == existing().status ||
+               (data.status == 'banned' && autoBanUnverifiedEnabled() && hasAutoBanDetails(data))
+             );
+    }
+
+    function keepsTabAccessRestrictionsUnchanged() {
+      return !(incoming().permissions is map) ||
+             (
+               incomingPermEnabled('disableMap') == existingPermEnabled('disableMap') &&
+               incomingPermEnabled('disableStops') == existingPermEnabled('disableStops')
+             );
+    }
+
+    // Policy: owner bypass, admin requires explicit logs=true.
+    function canReadAdminLogs() {
+      return isCallerOwner() || hasAdminPerm('logs');
+    }
+
+    function isValidDeviceCreate(data) {
+      let validKeys = data.keys().hasAll(['deviceInfo', 'role', 'firstLogin', 'status']);
+      let validTypes = data.deviceInfo is string && data.deviceInfo.size() <= 200 &&
+                       data.status in ['active', 'banned'] &&
+                       data.role == 'user' &&
+                       (!(data.verified is bool) || data.verified == false);
+      let activeAllowed = data.status == 'active' && !autoBanUnverifiedEnabled();
+      let autoBannedAllowed = data.status == 'banned' && data.verified == false && hasAutoBanDetails(data);
+      return validKeys && validTypes && (activeAllowed || autoBannedAllowed);
+    }
+
+    function canCreateDeviceFromInstallationProfile(data) {
+      let instId = data.installationId;
+      let profile = get(/databases/$(database)/documents/installations/$(instId)).data;
+      return instId is string &&
+             isValidId(instId) &&
+             exists(/databases/$(database)/documents/installations/$(instId)) &&
+             data.role in ['owner', 'admin', 'user'] &&
+             data.role == profile.role &&
+             (
+               !(data.verified is bool) ||
+               data.verified == profile.verified ||
+               (!(profile.verified is bool) && data.verified == false) ||
+               data.role in ['owner', 'admin']
+             ) &&
+             (!(data.status is string) || !(profile.status is string) || data.status == profile.status) &&
+             data.permissions is map &&
+             (
+               profile.role == 'user' ||
+               profile.role in ['owner', 'admin'] ||
+               profile.updatedBy == request.auth.uid ||
+               profile.lastUid == request.auth.uid
+             );
+    }
+
+    match /devices/{deviceId} {
+      // Single document reads.
+      allow get: if isSignedIn() && isValidDeviceDocId(deviceId) && (
+        isOwner(deviceId) || isCallerOwner() || hasAdminPerm('canViewList')
+      );
+
+      // Collection listing.
+      allow list: if isSignedIn() && canListDevices();
+
+      // Free-tier path (without Cloud Functions): owner creates own identity as basic user.
+      allow create: if isSignedIn() && isValidDeviceDocId(deviceId) && isOwner(deviceId) &&
+                    (isValidDeviceCreate(incoming()) || canCreateDeviceFromInstallationProfile(incoming())) &&
+                    incoming().permissions is map;
+
+      allow update: if isSignedIn() && isValidDeviceDocId(deviceId) && (
+        // Heartbeat only for own doc.
+        (
+          isOwner(deviceId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['lastSeenAt', 'deviceInfo']) &&
+          !(autoBanUnverifiedEnabled() && existing().role == 'user' && existing().verified != true && existing().status == 'active') &&
+          (
+            !incoming().diff(existing()).affectedKeys().hasAny(['deviceInfo']) ||
+            (incoming().deviceInfo is string && incoming().deviceInfo.size() <= 200)
+          )
+        ) ||
+
+        // Own display/device name only.
+        (
+          isOwner(deviceId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'deviceName']) &&
+          (
+            !incoming().diff(existing()).affectedKeys().hasAny(['displayName']) ||
+            (incoming().displayName is string && incoming().displayName.size() <= 120)
+          ) &&
+          (
+            !incoming().diff(existing()).affectedKeys().hasAny(['deviceName']) ||
+            (incoming().deviceName is string && incoming().deviceName.size() <= 120)
+          )
+        ) ||
+
+        // Own auto-ban when global verification enforcement is enabled.
+        (
+          isOwner(deviceId) &&
+          autoBanUnverifiedEnabled() &&
+          existing().role == 'user' &&
+          existing().verified != true &&
+          existing().status == 'active' &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'banDetails', 'verified']) &&
+          incoming().status == 'banned' &&
+          incoming().verified == false &&
+          hasAutoBanDetails(incoming())
+        ) ||
+
+        // Ban / unban for others.
+        (
+          request.auth.uid != deviceId &&
+          (isCallerOwner() || hasAdminPerm('canBan')) &&
+          (!(existing().role in ['owner', 'admin']) || isCallerOwner()) &&
+          incoming().diff(existing()).affectedKeys().hasAny(['status', 'banDetails']) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'banDetails', 'verified']) &&
+          incoming().status in ['active', 'banned'] &&
+          (
+            !incoming().diff(existing()).affectedKeys().hasAny(['verified']) ||
+            isCallerOwner() ||
+            (incoming().status == 'banned' && incoming().verified == existing().verified) ||
+            (existing().status == 'banned' && incoming().status == 'active' && incoming().verified == true)
+          )
+        ) ||
+
+        // Owner-only verification toggle for normal devices.
+        (
+          request.auth.uid != deviceId &&
+          isCallerOwner() &&
+          existing().role == 'user' &&
+          incoming().role == existing().role &&
+          incoming().status == existing().status &&
+          incoming().permissions == existing().permissions &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['verified']) &&
+          incoming().verified is bool
+        ) ||
+
+        // Role / permissions / displayName / deviceName edits for others.
+        (
+          request.auth.uid != deviceId &&
+          (isCallerOwner() || hasAdminPerm('canChangeRoles')) &&
+          (isCallerOwner() || keepsTabAccessRestrictionsUnchanged()) &&
+          (!(existing().role in ['owner', 'admin']) || isCallerOwner()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['role', 'permissions', 'displayName', 'deviceName', 'verified']) &&
+          incoming().diff(existing()).affectedKeys().hasAny(['role', 'permissions', 'displayName', 'deviceName', 'verified']) &&
+          incoming().role in ['owner', 'admin', 'user'] &&
+          incomingPermissionsKnown() &&
+          adminPermissionGrantAllowed() &&
+          (
+            !incoming().diff(existing()).affectedKeys().hasAny(['verified']) ||
+            isCallerOwner() ||
+            (incoming().role in ['owner', 'admin'] && incoming().verified == true)
+          ) &&
+          (
+            !incoming().diff(existing()).affectedKeys().hasAny(['displayName']) ||
+            !('displayName' in incoming()) ||
+            (incoming().displayName is string && incoming().displayName.size() <= 120)
+          ) &&
+          (
+            !incoming().diff(existing()).affectedKeys().hasAny(['deviceName']) ||
+            !('deviceName' in incoming()) ||
+            (incoming().deviceName is string && incoming().deviceName.size() <= 120)
+          ) &&
+          (incoming().role != 'owner' || existing().role == 'owner' || isCallerOwner())
+        )
+      );
+
+      allow delete: if isSignedIn() &&
+                    isValidDeviceDocId(deviceId) &&
+                    request.auth.uid != deviceId &&
+                    (
+                      isCallerOwner() ||
+                      (
+                        hasAdminPerm('users') &&
+                        callerDeviceData().role == 'admin' &&
+                        existing().role == 'user'
+                      )
+                    );
+    }
+
+    match /installations/{installationId} {
+      // Shared installation profile used to keep role/permissions stable across localhost ports.
+      allow read: if isSignedIn() && isValidId(installationId);
+      allow create: if isSignedIn() && isValidId(installationId) &&
+                    incoming().installationId == installationId &&
+                    incoming().updatedBy == request.auth.uid &&
+                    userInstallationCreateAllowed(incoming());
+      allow update: if isSignedIn() && isValidId(installationId) &&
+                    incoming().installationId == installationId &&
+                    incoming().updatedBy == request.auth.uid &&
+                    incomingPermissionsKnown() &&
+                    (
+                      isCallerOwner() ||
+                      (
+                        hasAdminPerm('canChangeRoles') &&
+                        incoming().role != 'owner' &&
+                        adminPermissionGrantAllowed()
+                      ) ||
+                      (
+                        hasAdminPerm('canBan') &&
+                        incoming().role == existing().role &&
+                        incoming().permissions == existing().permissions &&
+                        incoming().status in ['active', 'banned']
+                      ) ||
+                      userInstallationUpdateAllowed(incoming())
+                    );
+      allow delete: if isSignedIn() &&
+                    isValidId(installationId) &&
+                    (
+                      isCallerOwner() ||
+                      (
+                        hasAdminPerm('users') &&
+                        callerDeviceData().role == 'admin' &&
+                        existing().role == 'user'
+                      )
+                    );
+    }
+
+    match /blocked_installations/{installationId} {
+      allow read, write: if false;
+    }
+
+    match /device_model_aliases/{modelCode} {
+      allow read: if isSignedIn() && isValidId(modelCode);
+      allow create, update: if isSignedIn() && isValidId(modelCode) &&
+        isCallerOwner() &&
+        incoming().keys().hasOnly(['code', 'label', 'updatedAt', 'updatedBy']) &&
+        incoming().code == modelCode &&
+        incoming().label is string &&
+        incoming().label.size() > 0 &&
+        incoming().label.size() <= 80 &&
+        incoming().updatedBy == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /admin_logs/{logId} {
+      allow read: if canReadAdminLogs();
+      allow create: if isSignedIn() && isValidId(logId) && (isCallerOwner() || hasAdminPerm('canChangeRoles') || hasAdminPerm('users') || hasAdminPerm('canBan') || hasAdminPerm('globalSettingsEdit'));
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(logId) && isCallerOwner();
+    }
+
+    match /admin_settings/{settingId} {
+      allow read: if isSignedIn() && isValidId(settingId) &&
+        (settingId == 'security' || canReadGlobalAdminSettings());
+      allow create, update: if isSignedIn() && isValidId(settingId) && canWriteGlobalAdminSettings();
+      allow delete: if false;
+    }
+
+    match /maintenance_endpoints/{endpointId} {
+      allow read: if isSignedIn() && isValidId(endpointId) && canReadGlobalAdminSettings();
+      allow create, update, delete: if false;
+    }
+
+    match /maintenance_changes/{changeId} {
+      allow read: if isSignedIn() && isValidId(changeId) && canReadGlobalAdminSettings();
+      allow create, update, delete: if false;
+    }
+  }
+}

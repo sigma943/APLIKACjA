@@ -1,0 +1,28 @@
+{
+  "models": [
+    {
+      "model": "Urbino 12 IV",
+      "ranges": [[20, 44]]
+    },
+    {
+      "model": "Sancity 12LF",
+      "ranges": [[45, 59], [81, 95]]
+    },
+    {
+      "model": "Jest",
+      "ranges": [[60, 72]]
+    },
+    {
+      "model": "Feniks",
+      "ranges": [[73, 80]]
+    },
+    {
+      "model": "Citibus",
+      "ranges": [[180, 182]]
+    },
+    {
+      "model": "Novociti Life",
+      "ranges": [[1, 15], [104, 118]]
+    }
+  ]
+}
