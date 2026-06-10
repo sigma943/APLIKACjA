@@ -450,12 +450,23 @@ async function buildPksQuickDetailsFromBase(baseVehicle?: Vehicle | null): Promi
     (baseVehicle.routePath?.length || 0) > 1;
   if (!hasAnyRouteData) return null;
 
-  const stopIndex = await loadStopPointIndex().catch(() => ({} as StopPointIndex));
+  const [stopIndex, stopsDict, fullStopsDict] = await Promise.all([
+    loadStopPointIndex().catch(() => ({} as StopPointIndex)),
+    loadStopsDictionary().catch(() => ({} as Record<string, string>)),
+    loadFullStopsDictionary().catch(() => ({} as Record<string, FullStopRecord>)),
+  ]);
+  const isGenericStopName = (name?: string | null) => /^Przystanek\s+\d+$/i.test(String(name || '').trim());
+  const resolvePksStopName = (id: string | number, currentName?: string | null) => {
+    const normalizedId = String(id);
+    const current = String(currentName || '').trim();
+    if (current && !isGenericStopName(current)) return current;
+    return fullStopsDict[normalizedId]?.name || stopsDict[normalizedId] || stopIndex[normalizedId]?.n || current || `Przystanek ${normalizedId}`;
+  };
   const enrichStop = (stop: NonNullable<Vehicle['schedule']>[number]) => {
     const indexed = stopIndex[String(stop.id)];
     return {
       ...stop,
-      name: stop.name || indexed?.n || `Przystanek ${stop.id}`,
+      name: resolvePksStopName(stop.id, stop.name),
       lat: Number.isFinite(stop.lat) ? stop.lat : indexed?.lat,
       lon: Number.isFinite(stop.lon) ? stop.lon : indexed?.lon,
     };
@@ -467,14 +478,15 @@ async function buildPksQuickDetailsFromBase(baseVehicle?: Vehicle | null): Promi
     : (baseVehicle.routePath || [])
         .map((id): NonNullable<Vehicle['routeStops']>[number] | null => {
           const indexed = stopIndex[String(id)];
-          if (!indexed) return null;
+          const name = resolvePksStopName(id);
+          if (!indexed && isGenericStopName(name)) return null;
           return {
             id: Number(id),
-            name: indexed.n || `Przystanek ${id}`,
+            name,
             planned: null,
             real: null,
-            lat: indexed.lat,
-            lon: indexed.lon,
+            lat: indexed?.lat,
+            lon: indexed?.lon,
           };
         })
         .filter((stop): stop is NonNullable<Vehicle['routeStops']>[number] => Boolean(stop));

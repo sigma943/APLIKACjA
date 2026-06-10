@@ -23,6 +23,7 @@ import {
 import { useFirebase } from '@/components/FirebaseProvider';
 import { canAccessAdminDashboard } from '@/lib/admin/rbac';
 import { formatPublicStopName } from '@/lib/stop-display';
+import StopsPanel from '@/components/stops-panel/StopsPanel';
 
 const PKS_COLOR = '#14b8a6';
 const MPK_RZESZOW_COLOR = '#ff7a00';
@@ -105,11 +106,6 @@ const TransportSelectorPanel = dynamic(() => import('@/components/TransportSelec
 
 const TrainDetailsPanel = dynamic(() => import('@/components/TrainDetailsPanel'), {
   ssr: false,
-});
-
-const StopsPanel = dynamic(() => import('@/components/stops-panel/StopsPanel'), {
-  ssr: false,
-  loading: () => null,
 });
 
 const AdminDashboard = dynamic(() => import('@/app/admin/AdminDashboard'), {
@@ -426,6 +422,35 @@ const getVehicleDisplayNumber = (vehicle?: Pick<Vehicle, 'vehicleNumber' | 'id' 
   return String(vehicle?.vehicleNumber || vehicle?.id || '').replace(/^(mpk_rzeszow|marcel)_/, '');
 };
 
+const normalizeMapFilterValue = (value?: string | number | null) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^mks\s+/, '')
+    .replace(/\s+/g, '');
+
+const matchesMapVehicleFilter = (vehicle: Vehicle, rawFilter: string) => {
+  const query = normalizeMapFilterValue(rawFilter);
+  if (!query) return true;
+
+  const lineValues = [
+    vehicle.routeShortName,
+    vehicle.routeId,
+    (vehicle as any).line,
+  ].map(normalizeMapFilterValue).filter(Boolean);
+
+  if (lineValues.some((line) => line === query)) return true;
+
+  const isShortLineQuery = /^[a-z0-9]{1,3}$/i.test(query);
+  if (isShortLineQuery) return false;
+
+  return [
+    ...lineValues,
+    vehicle.id,
+    getVehicleDisplayNumber(vehicle),
+  ].map(normalizeMapFilterValue).some((value) => value.includes(query));
+};
+
 export default function Home() {
   const { device, loading, hiddenProviderIds } = useFirebase();
   const isOwnerDevice = device?.role === 'owner';
@@ -564,6 +589,18 @@ export default function Home() {
   useEffect(() => {
     activeProvidersRef.current = activeProviders;
   }, [activeProviders]);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const isSecure = window.location.protocol === 'https:' || isLocalhost;
+    if (!isSecure) return;
+    const timer = window.setTimeout(() => {
+      navigator.serviceWorker
+        .register('/mks-map-cache-sw.js', { scope: '/' })
+        .catch((error) => console.warn('Map cache service worker unavailable:', error));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   useEffect(() => {
     vehiclesRef.current = vehicles;
     writeCachedVehicles(vehicles);
@@ -1108,10 +1145,12 @@ export default function Home() {
       const list = stops || [];
       if (list.length === 0) return 0;
       let withCoords = 0;
+      let withRealNames = 0;
       for (const stop of list) {
         if (Number.isFinite(stop?.lat) && Number.isFinite(stop?.lon)) withCoords += 1;
+        if (stop?.name && !/^Przystanek\s+\d+$/i.test(String(stop.name).trim())) withRealNames += 1;
       }
-      return list.length + withCoords * 3;
+      return list.length + withCoords * 3 + withRealNames * 4;
     };
 
     const baseScheduleScore = scheduleScore(baseSchedule);
@@ -1570,23 +1609,16 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (stopsList.length > 0) return;
-    if (activeTab === 'stops') {
-      loadStops();
-      return;
-    }
-    if (activeTab !== 'map' || !mapVehiclesEnabled || !hasBootstrappedLiveVehicles) return;
-
     let cancelIdle = () => {};
     const cancelPaint = scheduleAfterFirstPaint(() => {
-      cancelIdle = scheduleClientIdle(loadStops, 3200);
-    }, 1200);
+      cancelIdle = scheduleClientIdle(loadStops, 1600);
+    }, 250);
     return () => {
       cancelPaint();
       cancelIdle();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, hasBootstrappedLiveVehicles, mapVehiclesEnabled, stopsList.length]);
+  }, []);
 
   useEffect(() => {
     if (selectedBus) {
@@ -2584,43 +2616,41 @@ export default function Home() {
 
             </div>
          {/* ============== NEW STOPS VIEW ============== */}
-         {activeTab === 'stops' && (
-            <motion.div
-               key="new-stops-panel"
-               initial={{ opacity: 0, y: 14, scale: 0.985 }}
-               animate={{ opacity: 1, y: 0, scale: 1 }}
-               exit={{ opacity: 0, y: 14, scale: 0.985 }}
-               transition={{ type: 'spring', stiffness: 700, damping: 35 }}
-               className={`absolute inset-0 z-10 overflow-hidden pointer-events-auto ${
-                  transparentUI
-                    ? 'bg-slate-950/88 backdrop-blur-2xl backdrop-saturate-150 before:pointer-events-none before:absolute before:inset-0 before:bg-white/[0.025] before:content-[""]'
-                    : 'bg-[#03060a]'
-               }`}
-            >
-               <StopsPanel
-                  stops={stopsList}
-                  isLoading={stopsList.length === 0 && !stopsLoadError}
-                  hasError={stopsLoadError}
-                  favorites={favsState}
-                  vehicles={vehicles}
-                  transparentUI={transparentUI}
-                  isDarkTheme={isDark}
-                  onRetry={loadStops}
-                  onClose={() => { if (!isMapTabDisabled) setActiveTab('map'); }}
-                  onToggleFavorite={toggleFavoriteStop}
-                  onShowOnMap={(stop) => {
-                     if (isMapTabDisabled) return;
-                     if (stop.lat !== undefined && stop.lon !== undefined) {
-                        setMapCenter([stop.lat, stop.lon]);
-                     }
-                     setSelectedBus(null);
-                     setSelectedExternalStop(stop);
-                     setSelectedStopId(stop.id);
-                     setActiveTab('map');
-                  }}
-               />
-            </motion.div>
-         )}
+         <motion.div
+            key="new-stops-panel"
+            initial={false}
+            animate={activeTab === 'stops' ? { opacity: 1, y: 0, scale: 1 } : { opacity: 0, y: 14, scale: 0.985 }}
+            transition={{ type: 'spring', stiffness: 700, damping: 35 }}
+            className={`absolute inset-0 z-10 overflow-hidden ${activeTab === 'stops' ? 'pointer-events-auto' : 'pointer-events-none'} ${
+               transparentUI
+                 ? 'bg-slate-950/88 backdrop-blur-2xl backdrop-saturate-150 before:pointer-events-none before:absolute before:inset-0 before:bg-white/[0.025] before:content-[""]'
+                 : 'bg-[#03060a]'
+            }`}
+            aria-hidden={activeTab !== 'stops'}
+         >
+            <StopsPanel
+               stops={stopsList}
+               isLoading={stopsList.length === 0 && !stopsLoadError}
+               hasError={stopsLoadError}
+               favorites={favsState}
+               vehicles={vehicles}
+               transparentUI={transparentUI}
+               isDarkTheme={isDark}
+               onRetry={loadStops}
+               onClose={() => { if (!isMapTabDisabled) setActiveTab('map'); }}
+               onToggleFavorite={toggleFavoriteStop}
+               onShowOnMap={(stop) => {
+                  if (isMapTabDisabled) return;
+                  if (stop.lat !== undefined && stop.lon !== undefined) {
+                     setMapCenter([stop.lat, stop.lon]);
+                  }
+                  setSelectedBus(null);
+                  setSelectedExternalStop(stop);
+                  setSelectedStopId(stop.id);
+                  setActiveTab('map');
+               }}
+            />
+         </motion.div>
 
       </div>
 

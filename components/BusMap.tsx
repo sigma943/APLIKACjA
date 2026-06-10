@@ -465,6 +465,22 @@ function MapStateTracker({
   return null;
 }
 
+function useCachedMapTiles() {
+  const [canUseCachedTiles, setCanUseCachedTiles] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+
+    const update = () => setCanUseCachedTiles(Boolean(navigator.serviceWorker.controller));
+    update();
+    navigator.serviceWorker.ready.then(update).catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', update);
+    return () => navigator.serviceWorker.removeEventListener('controllerchange', update);
+  }, []);
+
+  return canUseCachedTiles;
+}
+
 const formatDelay = (delaySec: number | undefined) => {
   if (delaySec === undefined) return null;
   if (Math.abs(delaySec) > 18000) return null; // Ignore absurd delays > 5 hours
@@ -1113,8 +1129,8 @@ function VehicleMarkerLayer({
   const getVehicleMarkerKey = useCallback((vehicle: Vehicle) => `${vehicle.provider || 'pks'}:${vehicle.id}`, []);
 
   useEffect(() => {
-    setUseCanvasMarkers(vehicles.length > 70);
-  }, [vehicles.length]);
+    setUseCanvasMarkers(false);
+  }, []);
 
   const registerMarker = useCallback((markerKey: string, marker: L.Marker | null) => {
     if (marker) markerRefs.current.set(markerKey, marker);
@@ -1556,11 +1572,23 @@ export default function BusMap({
     return { center: [50.0412, 21.9991], zoom: 13 };
   });
   const [initialMarkersReady, setInitialMarkersReady] = useState(false);
+  const canUseCachedTiles = useCachedMapTiles();
+  const tileLayerUrl = canUseCachedTiles
+    ? '/mks-map-tile/google/{z}/{x}/{y}.png?lyrs=m&hl=pl&gl=PL'
+    : 'https://mt1.google.com/vt/lyrs=m&hl=pl&gl=PL&x={x}&y={y}&z={z}';
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const handleInitialMarkersReady = useCallback(() => {
     setInitialMarkersReady(true);
   }, []);
+
+  useEffect(() => {
+    if (initialMarkersReady) return;
+    const timer = window.setTimeout(() => {
+      setInitialMarkersReady(true);
+    }, 2200);
+    return () => window.clearTimeout(timer);
+  }, [initialMarkersReady]);
 
   const handleInteraction = useCallback((active: boolean) => {
     if (mapContainerRef.current) {
@@ -1908,7 +1936,7 @@ export default function BusMap({
         <ZoomControl position="bottomright" />
         <TileLayer
           attribution='Map tiles by Google'
-          url="https://mt1.google.com/vt/lyrs=m&hl=pl&gl=PL&x={x}&y={y}&z={z}"
+          url={tileLayerUrl}
           maxZoom={19}
         />
 
