@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import { createContext, useContext, useEffect, useState } from 'react';
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import { auth, db, functions } from '@/lib/firebase';
 import { signInAnonymously, onAuthStateChanged, User } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
@@ -17,6 +17,7 @@ const registerDeviceIdentityFn = httpsCallable<
   { installationId: string; deviceInfo: string },
   { ok?: boolean; installationId?: string; status?: string; dedupedPreviousUid?: string }
 >(functions, 'registerDeviceIdentity');
+const REGISTER_DEVICE_IDENTITY_URL = 'https://us-central1-aplikacja-b20fa.cloudfunctions.net/registerDeviceIdentity';
 
 export interface DeviceData {
   deviceInfo: string;
@@ -166,6 +167,38 @@ async function getClientDeviceInfo(): Promise<string> {
   return ua.substring(0, 200);
 }
 
+async function registerDeviceIdentityWithFallback(
+  user: User,
+  payload: { installationId: string; deviceInfo: string },
+) {
+  try {
+    await registerDeviceIdentityFn(payload);
+    return;
+  } catch (fnErr) {
+    if (!Capacitor.isNativePlatform()) throw fnErr;
+
+    const token = await user.getIdToken(true);
+    const response = await CapacitorHttp.post({
+      url: REGISTER_DEVICE_IDENTITY_URL,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      data: { data: payload },
+      connectTimeout: 12_000,
+      readTimeout: 18_000,
+    });
+
+    const ok = response.status >= 200 && response.status < 300 && !(response.data as any)?.error;
+    if (!ok) {
+      const message = typeof response.data === 'string'
+        ? response.data
+        : JSON.stringify(response.data || {});
+      throw new Error(`Native device registration failed: HTTP ${response.status} ${message}`.slice(0, 500));
+    }
+  }
+}
+
 export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [device, setDevice] = useState<DeviceData | null>(null);
@@ -183,6 +216,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [autoBanUnverified, setAutoBanUnverified] = useState(false);
   const [localLastSeenMs, setLocalLastSeenMs] = useState<number | null>(null);
   const [hiddenProviderIds, setHiddenProviderIds] = useState<string[]>(() => readHiddenProviderIdsCache());
+  const [registrationRetryTick, setRegistrationRetryTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -336,9 +370,11 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
+    if (networkStatusReady && browserOffline) return;
 
     const deviceRef = doc(db, 'devices', user.uid);
     let cancelled = false;
+    let retryTimer: number | null = null;
 
     (async () => {
       const instId = await getOrCreateInstallationId();
@@ -356,7 +392,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
       try {
         const deviceInfo = await getClientDeviceInfo();
         try {
-          await registerDeviceIdentityFn({ installationId: instId, deviceInfo });
+          await registerDeviceIdentityWithFallback(user, { installationId: instId, deviceInfo });
           agentLog(
             'FirebaseProvider.tsx:registerIdentity:functionOk',
             'Device identity saved via Cloud Function',
@@ -366,6 +402,8 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
             },
             'H5',
           );
+          setLocalLastSeenMs(Date.now());
+          updateDoc(deviceRef, { lastSeenAt: serverTimestamp() }).catch(() => {});
           return;
         } catch (fnErr) {
           console.warn('Cloud Function device registration unavailable, using Firestore fallback', fnErr);
@@ -487,6 +525,11 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
           'H5',
         );
         // #endregion
+        if (!cancelled) {
+          retryTimer = window.setTimeout(() => {
+            setRegistrationRetryTick((value) => value + 1);
+          }, Capacitor.isNativePlatform() ? 7000 : 15000);
+        }
       }
     })();
 
@@ -542,9 +585,10 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
       unsub();
     };
-  }, [user]);
+  }, [user, browserOffline, networkStatusReady, registrationRetryTick]);
 
   // Heartbeat â€žostatnio onlineâ€ť â€” wymaga prawdziwego konta Firebase (nie trybu guest_*).
   useEffect(() => {

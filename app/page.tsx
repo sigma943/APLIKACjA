@@ -17,6 +17,8 @@ import {
   fetchStopsClient,
   fetchVehicleDetailsClient,
   fetchVehiclesClient,
+  preloadRouteShapeAssets,
+  preloadTransportDetailAssets,
   type PkpQueryViewport,
   type TransportProviderId,
 } from '@/lib/pks-client';
@@ -599,6 +601,14 @@ export default function Home() {
         .register('/mks-map-cache-sw.js', { scope: '/' })
         .catch((error) => console.warn('Map cache service worker unavailable:', error));
     }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const timer = window.setTimeout(() => {
+      preloadRouteShapeAssets();
+      preloadTransportDetailAssets();
+    }, 600);
     return () => window.clearTimeout(timer);
   }, []);
   useEffect(() => {
@@ -2404,13 +2414,15 @@ export default function Home() {
                                    selectedBus.status !== 'inactive' &&
                                    Number.isFinite(busDelaySec) &&
                                    Math.abs(busDelaySec) <= 18000;
-                                const computedDelayTime = plannedTime && canUseBusDelay && busDelaySec !== 0 ? new Date(plannedTime.getTime() + (busDelaySec * 1000)) : null;
+                                const computedDelayTime = plannedTime && canUseBusDelay ? new Date(plannedTime.getTime() + (busDelaySec * 1000)) : null;
                                 const rawLooksPlanned = Boolean(realTimeRaw && plannedTime && Math.abs(realTimeRaw.getTime() - plannedTime.getTime()) < 60_000);
-                                const realTime = rawLooksPlanned ? (computedDelayTime || realTimeRaw) : (realTimeRaw || computedDelayTime);
+                                const realTime = canUseBusDelay
+                                  ? computedDelayTime
+                                  : (rawLooksPlanned ? (computedDelayTime || realTimeRaw) : (realTimeRaw || computedDelayTime));
                                 const displayTime = realTime || plannedTime;
                                 let delayMin = 0;
                                 if (realTime && plannedTime) delayMin = Math.round((realTime.getTime() - plannedTime.getTime()) / 60000);
-                                const busDelayMin = canUseBusDelay && busDelaySec !== 0
+                                const busDelayMin = canUseBusDelay
                                   ? Math.round(busDelaySec / 60)
                                   : delayMin;
                                 const formatTime = (time: Date) => {

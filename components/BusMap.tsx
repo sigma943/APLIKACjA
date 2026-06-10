@@ -1,18 +1,17 @@
 'use client';
 
-import { memo, startTransition, useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { memo, startTransition, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, useMap, CircleMarker, ZoomControl, useMapEvents, Pane } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { fetchRouteGeometryClient, fetchRouteShapeClient, type RouteGeometryStop } from '@/lib/pks-client';
+import { fetchRouteGeometryClient, fetchRouteShapeClient, preloadRouteShapeAssets, type RouteGeometryStop } from '@/lib/pks-client';
 import { formatPublicStopName } from '@/lib/stop-display';
 
 const PKS_COLOR = '#14b8a6';
 const MPK_RZESZOW_COLOR = '#ff7a00';
 const MARCEL_COLOR = '#68c44a';
 const PKP_INTERCITY_COLOR = '#1d4ed8';
-const ROUTE_POINT_LIMIT = 5000;
-const ROAD_ROUTE_GEOMETRY_CACHE_VERSION = 'road-v10';
+const ROAD_ROUTE_GEOMETRY_CACHE_VERSION = 'road-v11';
 const RAIL_ROUTE_GEOMETRY_CACHE_VERSION = 'rail-v1';
 const ROUTE_GEOMETRY_LOCAL_PREFIX = 'routeGeometry:';
 const ROUTE_GEOMETRY_DB_NAME = 'pks-live-route-geometry';
@@ -130,23 +129,14 @@ function getVehicleColor(vehicle?: Pick<Vehicle, 'provider'> | null, fallback = 
   return fallback;
 }
 
-function simplifyRouteForPaint(points: [number, number][], maxPoints = ROUTE_POINT_LIMIT) {
-  const cleaned = removeRoutePaintSpikes(points);
-  if (cleaned.length <= maxPoints) return cleaned;
-  const step = Math.ceil(cleaned.length / maxPoints);
-  const simplified: [number, number][] = [];
+function keepFullRouteForPaint(points: [number, number][]) {
+  return points.filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
+}
 
-  for (let i = 0; i < cleaned.length; i += step) {
-    simplified.push(cleaned[i]);
-  }
-
-  const last = cleaned[cleaned.length - 1];
-  const currentLast = simplified[simplified.length - 1];
-  if (!currentLast || currentLast[0] !== last[0] || currentLast[1] !== last[1]) {
-    simplified.push(last);
-  }
-
-  return simplified;
+function buildInstantStopRoute(stops: RouteGeometryStop[]): [number, number][] {
+  return stops
+    .filter((stop) => Number.isFinite(stop.lat) && Number.isFinite(stop.lon))
+    .map((stop) => [Number(stop.lat), Number(stop.lon)] as [number, number]);
 }
 
 function routePaintDistanceMeters(a: [number, number], b: [number, number]) {
@@ -1562,6 +1552,11 @@ export default function BusMap({
     : 'https://mt1.google.com/vt/lyrs=m&hl=pl&gl=PL&x={x}&y={y}&z={z}';
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const id = window.setTimeout(() => preloadRouteShapeAssets(), 250);
+    return () => window.clearTimeout(id);
+  }, []);
+
   const handleInitialMarkersReady = useCallback(() => {
     setInitialMarkersReady(true);
   }, []);
@@ -1586,11 +1581,31 @@ export default function BusMap({
 
   const selectedVehicle = selectedVehicleOverride || vehicles.find(v => v.id === selectedVehicleId);
   const [snappedRoute, setSnappedRoute] = useState<[number, number][]>([]);
+  const [snappedRouteOwner, setSnappedRouteOwner] = useState('');
   const refinedRouteCacheRef = useRef(new Map<string, [number, number][]>());
   const refinedRouteByVehicleRef = useRef(new Map<string, [number, number][]>());
   const selectedVehicleIdentityRef = useRef<string>('');
   const routeAbortRef = useRef<AbortController | null>(null);
   const activeRouteRequestIdRef = useRef(0);
+  const selectedVehicleIdentity = selectedVehicle
+    ? `${selectedVehicle.provider || 'pks'}:${selectedVehicle.id}`
+    : '';
+  const clearSnappedRoute = useCallback(() => {
+    setSnappedRoute([]);
+    setSnappedRouteOwner('');
+  }, []);
+  const setOwnedSnappedRoute = useCallback((owner: string, points: [number, number][]) => {
+    setSnappedRoute(points);
+    setSnappedRouteOwner(points.length > 1 ? owner : '');
+  }, []);
+
+  useLayoutEffect(() => {
+    routeAbortRef.current?.abort();
+    routeAbortRef.current = null;
+    activeRouteRequestIdRef.current += 1;
+    clearSnappedRoute();
+    selectedVehicleIdentityRef.current = selectedVehicleIdentity;
+  }, [clearSnappedRoute, selectedVehicleIdentity]);
   const routeStopsSource = useMemo(() => {
     const routeStops = selectedVehicle?.routeStops || [];
     if (routeStops.length > 0) return routeStops;
@@ -1629,7 +1644,7 @@ export default function BusMap({
     if (scheduleIds.length > 0) return dedupeStableStopIds(scheduleIds);
 
     const futureRouteStopIds = (selectedVehicle?.routeStops || [])
-      .filter((stop: any) => !stop?.isPast)
+      .filter((stop: any) => stop?.isPast === false)
       .map((stop: any) => stop.id)
       .filter((id: unknown) => Number.isFinite(Number(id)));
     return futureRouteStopIds.length > 0 ? dedupeStableStopIds(futureRouteStopIds) : [];
@@ -1685,6 +1700,9 @@ export default function BusMap({
         routeStopsHash,
       ].join(':')
     : '';
+  const renderedSnappedRoute = selectedVehicle && snappedRouteOwner === selectedVehicleIdentity
+    ? snappedRoute
+    : [];
 
   useEffect(() => {
     activeRouteRequestIdRef.current += 1;
@@ -1693,25 +1711,41 @@ export default function BusMap({
     routeAbortRef.current = null;
 
     if (!selectedVehicle) {
-      startTransition(() => setSnappedRoute([]));
+      clearSnappedRoute();
       selectedVehicleIdentityRef.current = '';
       return;
     }
 
-    const currentIdentity = `${selectedVehicle.provider || 'pks'}:${selectedVehicle.id}`;
+    const currentIdentity = selectedVehicleIdentity;
     if (selectedVehicleIdentityRef.current && selectedVehicleIdentityRef.current !== currentIdentity) {
-      startTransition(() => setSnappedRoute([]));
+      clearSnappedRoute();
     }
     selectedVehicleIdentityRef.current = currentIdentity;
 
     if (routeGeometryStops.length < 2) {
-      startTransition(() => setSnappedRoute([]));
+      clearSnappedRoute();
       return;
+    }
+
+    const isCurrentRequest = () =>
+      !cancelled &&
+      requestId === activeRouteRequestIdRef.current &&
+      !controller.signal.aborted &&
+      selectedVehicleIdentityRef.current === currentIdentity;
+
+    if (
+      (selectedVehicle.provider === 'pks' || selectedVehicle.provider === 'marcel') &&
+      !refinedRouteCacheRef.current.has(routeKey)
+    ) {
+      const instantRoute = buildInstantStopRoute(routeGeometryStops);
+      if (instantRoute.length > 1) {
+        setOwnedSnappedRoute(currentIdentity, instantRoute);
+      }
     }
 
     const memoryRoute = routeShapeHash ? undefined : refinedRouteCacheRef.current.get(routeKey);
     if (memoryRoute && isCompleteRouteGeometry(memoryRoute, routeGeometryStops)) {
-      setSnappedRoute(memoryRoute);
+      setOwnedSnappedRoute(currentIdentity, memoryRoute);
       refinedRouteByVehicleRef.current.set(currentIdentity, memoryRoute);
       return;
     }
@@ -1730,21 +1764,23 @@ export default function BusMap({
           )
         : [];
       if (await isCompleteRouteGeometryAsync(apiRoute, routeGeometryStops)) {
-        const refinedApiRoute = simplifyRouteForPaint(apiRoute);
+        if (!isCurrentRequest()) return;
+        const refinedApiRoute = keepFullRouteForPaint(apiRoute);
         refinedRouteCacheRef.current.set(routeKey, refinedApiRoute);
         refinedRouteByVehicleRef.current.set(currentIdentity, refinedApiRoute);
         writePersistentRouteGeometry(routeKey, refinedApiRoute, routeGeometryVersion);
-        startTransition(() => setSnappedRoute(refinedApiRoute));
+        startTransition(() => setOwnedSnappedRoute(currentIdentity, refinedApiRoute));
         return;
       }
 
       const localRoute = await readPersistentRouteGeometry(routeKey, routeGeometryVersion);
-      if (cancelled || requestId !== activeRouteRequestIdRef.current || controller.signal.aborted) return;
+      if (!isCurrentRequest()) return;
       if (await isCompleteRouteGeometryAsync(localRoute, routeGeometryStops)) {
-        const refinedLocalRoute = simplifyRouteForPaint(localRoute);
+        if (!isCurrentRequest()) return;
+        const refinedLocalRoute = keepFullRouteForPaint(localRoute);
         refinedRouteCacheRef.current.set(routeKey, refinedLocalRoute);
         refinedRouteByVehicleRef.current.set(currentIdentity, refinedLocalRoute);
-        setSnappedRoute(refinedLocalRoute);
+        setOwnedSnappedRoute(currentIdentity, refinedLocalRoute);
         return;
       }
 
@@ -1763,17 +1799,17 @@ export default function BusMap({
               refineTimeoutMs: 900,
               disableSyntheticFallback: true,
               strictShortSegments: selectedVehicle.provider === 'mpk_rzeszow',
-              startPoint: [selectedVehicle.lat, selectedVehicle.lon],
             },
           ).catch(() => [])
         : [];
-      if (cancelled || requestId !== activeRouteRequestIdRef.current || controller.signal.aborted) return;
+      if (!isCurrentRequest()) return;
       if (await isCompleteRouteGeometryAsync(officialRoute, routeGeometryStops)) {
-        const refinedOfficialRoute = simplifyRouteForPaint(officialRoute);
+        if (!isCurrentRequest()) return;
+        const refinedOfficialRoute = keepFullRouteForPaint(officialRoute);
         refinedRouteCacheRef.current.set(routeKey, refinedOfficialRoute);
         refinedRouteByVehicleRef.current.set(currentIdentity, refinedOfficialRoute);
         writePersistentRouteGeometry(routeKey, refinedOfficialRoute, routeGeometryVersion);
-        startTransition(() => setSnappedRoute(refinedOfficialRoute));
+        startTransition(() => setOwnedSnappedRoute(currentIdentity, refinedOfficialRoute));
         return;
       }
 
@@ -1793,12 +1829,13 @@ export default function BusMap({
         mode: routeMode,
         stops: routeGeometryStops,
       }, { signal: controller.signal });
-      if (cancelled || requestId !== activeRouteRequestIdRef.current || controller.signal.aborted) return;
+      if (!isCurrentRequest()) return;
         const points = (response.geometry?.coordinates || [])
           .map(([lon, lat]) => [lat, lon] as [number, number])
           .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
         if (await isCompleteRouteGeometryAsync(points, routeGeometryStops)) {
-          const refinedRoute = simplifyRouteForPaint(points);
+          if (!isCurrentRequest()) return;
+          const refinedRoute = keepFullRouteForPaint(points);
           refinedRouteCacheRef.current.set(routeKey, refinedRoute);
           if (response.cacheKey) refinedRouteCacheRef.current.set(response.cacheKey, refinedRoute);
           refinedRouteByVehicleRef.current.set(currentIdentity, refinedRoute);
@@ -1814,14 +1851,14 @@ export default function BusMap({
             const firstVehicleKey = refinedRouteByVehicleRef.current.keys().next().value;
             if (firstVehicleKey) refinedRouteByVehicleRef.current.delete(firstVehicleKey);
           }
-          startTransition(() => setSnappedRoute(refinedRoute));
+          startTransition(() => setOwnedSnappedRoute(currentIdentity, refinedRoute));
           return;
         }
     };
 
     loadRoute().catch((error) => {
       if ((error as any)?.name === 'AbortError') return;
-      if (requestId !== activeRouteRequestIdRef.current || controller.signal.aborted) return;
+      if (!isCurrentRequest()) return;
       // Keep the last good rendered route when a transient network/backend error happens.
     });
 
@@ -1829,7 +1866,7 @@ export default function BusMap({
       cancelled = true;
       controller.abort();
     };
-  }, [routeKey, routeStopsHash, routeShapeHash, selectedVehicle?.provider, selectedVehicle?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [routeKey, routeStopsHash, routeShapeHash, selectedVehicle?.provider, selectedVehicle?.id, selectedVehicleIdentity, clearSnappedRoute, setOwnedSnappedRoute]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!initMapState) return null;
 
@@ -1946,7 +1983,7 @@ export default function BusMap({
         <Pane name="routeLinePane" style={{ zIndex: 430 }}>
           <RouteLineLayer
             routeKey={`${selectedVehicleId || ''}:${routeKey}`}
-            positions={snappedRoute}
+            positions={renderedSnappedRoute}
             haloOptions={routeHaloOpts}
             glowOptions={routeGlowOpts}
             lineOptions={routePolylineOpts}

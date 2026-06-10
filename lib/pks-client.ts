@@ -1,4 +1,4 @@
-import {Capacitor, CapacitorHttp} from '@capacitor/core';
+﻿import {Capacitor, CapacitorHttp} from '@capacitor/core';
 import type {Vehicle} from '@/components/BusMap';
 import {isPolishPublicHoliday, resolvePolishServiceDayType} from '@/lib/polish-calendar';
 import {formatPublicStopName} from '@/lib/stop-display';
@@ -116,6 +116,10 @@ const pkpTrainMetadataCache = new Map<string, { expiresAt: number; value: PkpTra
 const pkpTrainMetadataInflight = new Map<string, Promise<PkpTrainMetadata | null>>();
 const shapePointsCache = new Map<string, Promise<ShapePoint[]>>();
 const roadRouteCache = new Map<string, Promise<ShapePoint[]>>();
+const shapeMatchCache = new Map<string, string>();
+const PKS_RAW_SNAPSHOT_TTL_MS = 25_000;
+let pksRawSnapshotCache: { savedAt: number; items: any[] } | null = null;
+let pksRawSnapshotInflight: Promise<any[]> | null = null;
 const TRANSPORT_API_BASE_URL = (
   process.env.NEXT_PUBLIC_TRANSPORT_API_BASE_URL ||
   'https://us-central1-aplikacja-b20fa.cloudfunctions.net/transportApi'
@@ -347,24 +351,54 @@ async function requestText(url: string, init?: RequestInit & {headers?: Record<s
   return text;
 }
 
-async function fetchPksVehiclesSnapshot(signal?: AbortSignal) {
+function getPksRawVehicleId(vehicle: any) {
+  return String(vehicle?.vehicle_id ?? vehicle?.id ?? `json-${getTripBase(vehicle?.trip_id) || ''}`);
+}
+
+function findPksRawVehicleInSnapshot(items: any[], vehicleId: string) {
+  return (Array.isArray(items) ? items : []).find((vehicle) => getPksRawVehicleId(vehicle) === String(vehicleId)) || null;
+}
+
+function getCachedPksRawSnapshot() {
+  if (!pksRawSnapshotCache) return [];
+  if (Date.now() - pksRawSnapshotCache.savedAt > PKS_RAW_SNAPSHOT_TTL_MS) return [];
+  return pksRawSnapshotCache.items;
+}
+
+async function fetchPksVehiclesSnapshot(signal?: AbortSignal, options?: { preferCache?: boolean }) {
+  const cached = getCachedPksRawSnapshot();
+  if (options?.preferCache && cached.length > 0) return cached;
+  if (pksRawSnapshotInflight) return pksRawSnapshotInflight;
+
   const panelFeedUrl = isNative() ? 'http://185.214.67.112/api/its/vehicles' : '/api/pks/vehicles';
-  const panelFeed = await requestJson<any>(panelFeedUrl, {
-    signal,
-    headers: isNative()
-      ? {
-          Host: 'einfo.zgpks.rzeszow.pl',
-          Accept: 'application/json',
-        }
-      : { Accept: 'application/json' },
-  }).catch(() => null);
-  const panelItems = Array.isArray(panelFeed?.items) ? panelFeed.items : Array.isArray(panelFeed) ? panelFeed : [];
-  if (panelItems.length > 0) return panelItems;
+  pksRawSnapshotInflight = (async () => {
+    const panelFeed = await requestJson<any>(panelFeedUrl, {
+      signal,
+      headers: isNative()
+        ? {
+            Host: 'einfo.zgpks.rzeszow.pl',
+            Accept: 'application/json',
+          }
+        : { Accept: 'application/json' },
+    }).catch(() => null);
+    const panelItems = Array.isArray(panelFeed?.items) ? panelFeed.items : Array.isArray(panelFeed) ? panelFeed : [];
+    if (panelItems.length > 0) return panelItems;
 
-  const wsItems = await fetchPksVehiclesFromPanelWebSocket(signal).catch(() => []);
-  if (wsItems.length > 0) return wsItems;
+    const wsItems = await fetchPksVehiclesFromPanelWebSocket(signal).catch(() => []);
+    if (wsItems.length > 0) return wsItems;
 
-  return requestJson<any[]>('https://www.mpkrzeszow.pl/pks/get_vehicles.php', { signal }).catch(() => []);
+    return requestJson<any[]>('https://www.mpkrzeszow.pl/pks/get_vehicles.php', { signal }).catch(() => []);
+  })()
+    .then((items) => {
+      const safeItems = Array.isArray(items) ? items : [];
+      if (safeItems.length > 0) pksRawSnapshotCache = { savedAt: Date.now(), items: safeItems };
+      return safeItems;
+    })
+    .finally(() => {
+      pksRawSnapshotInflight = null;
+    });
+
+  return pksRawSnapshotInflight;
 }
 
 function fetchPksVehiclesFromPanelWebSocket(signal?: AbortSignal): Promise<any[]> {
@@ -411,35 +445,37 @@ async function fetchPksVehiclesClient(includeInactive: boolean, signal?: AbortSi
   const now = Date.now();
 
   return (Array.isArray(rawVehicles) ? rawVehicles : [])
-    .map((vehicle) => mapVehicle(vehicle, now, includeInactive, {}, false))
+    .map((vehicle) => mapVehicle(vehicle, now, includeInactive, {}, true))
     .filter((vehicle): vehicle is Vehicle => Boolean(vehicle))
     .map((vehicle) => ({
       ...vehicle,
       provider: 'pks' as const,
-      operatorName: 'PKS Rzeszów',
+      operatorName: 'PKS RzeszĂłw',
       type: 'bus' as const,
     }));
 }
 
 async function fetchPksVehicleDetailsClient(vehicleId: string, includeInactive: boolean) {
-  const [rawVehicles, stopsDict] = await Promise.all([
-    fetchPksVehiclesSnapshot(),
-    loadStopsDictionary(),
-  ]);
-  const rawVehicle = (Array.isArray(rawVehicles) ? rawVehicles : []).find((vehicle) =>
-    String(vehicle?.vehicle_id ?? vehicle?.id ?? `json-${getTripBase(vehicle?.trip_id) || ''}`) === String(vehicleId),
+  const cachedRawVehicle = findPksRawVehicleInSnapshot(getCachedPksRawSnapshot(), vehicleId);
+  const stopsDictPromise = loadStopsDictionary();
+  const rawVehicle = cachedRawVehicle || findPksRawVehicleInSnapshot(
+    await fetchPksVehiclesSnapshot(undefined, { preferCache: true }),
+    vehicleId,
   );
   if (!rawVehicle) return null;
 
+  const stopsDict = await stopsDictPromise;
   const mapped = mapVehicle(rawVehicle, Date.now(), includeInactive, stopsDict, true);
-  return mapped
-    ? {
-        ...mapped,
-        provider: 'pks' as const,
-        operatorName: 'PKS Rzeszów',
-        type: 'bus' as const,
-      }
-    : null;
+  if (mapped) {
+    const vehicle = {
+      ...mapped,
+      provider: 'pks' as const,
+      operatorName: 'PKS RzeszÄ‚Ĺ‚w',
+      type: 'bus' as const,
+    };
+    return await buildPksQuickDetailsFromBase(vehicle).catch(() => null) || vehicle;
+  }
+  return null;
 }
 
 async function buildPksQuickDetailsFromBase(baseVehicle?: Vehicle | null): Promise<Vehicle | null> {
@@ -513,7 +549,7 @@ async function fetchMpkRzeszowVehiclesClient(includeInactive: boolean, signal?: 
     if (vehicles.length > 0) return vehicles;
     return fetchMpkRzeszowVehiclesDirect(includeInactive);
   } catch (error) {
-    console.warn('MPK Rzeszów backend unavailable, using direct MPK feed:', error);
+    console.warn('MPK RzeszĂłw backend unavailable, using direct MPK feed:', error);
     return fetchMpkRzeszowVehiclesDirect(includeInactive);
   }
 }
@@ -720,7 +756,7 @@ function cleanMarcelStopName(value: string) {
 function getMarcelDestination(routeName: string, fallback = 'W trasie') {
   const normalized = String(routeName || '').trim();
   if (!normalized) return fallback;
-  const parts = normalized.split(/\s*[-–—]\s*/).map((part) => part.trim()).filter(Boolean);
+  const parts = normalized.split(/\s*[-â€“â€”]\s*/).map((part) => part.trim()).filter(Boolean);
   return parts.length > 1 ? parts[parts.length - 1] : normalized;
 }
 
@@ -938,7 +974,7 @@ async function mapMarcelDirectVehicle(raw: any, now: number, includeInactive: bo
   const fullRoutePath = routeStops.map((stop) => stop.id);
   const hasLine = line !== '?';
   const vehicleStatus = inferMarcelStatus(hasLine, lat, lon, courseStops, delay, dataAgeSec, now);
-  const rawSpeed = readMarcelNumber(raw, ['speed', 'predkosc', 'prędkość', 'v', 'velocity', 'position.speed']);
+  const rawSpeed = readMarcelNumber(raw, ['speed', 'predkosc', 'prÄ™dkoĹ›Ä‡', 'v', 'velocity', 'position.speed']);
   const speed = computeObservedSpeedKmh(`marcel:${rawVehicleId}`, lat, lon, signalMs, rawSpeed);
   const nextStopId = schedule[0]?.id ?? routeStops.find((stop) => !stop.isPast)?.id ?? '';
   const progressState = getMarcelProgressState(String(rawVehicleId), lat, lon, tripId, nextStopId, now);
@@ -1229,7 +1265,7 @@ function mapMpkDirectVehicle(
   return {
     id: `mpk_rzeszow_${vehicleNumber}`,
     provider: 'mpk_rzeszow',
-    operatorName: 'MPK Rzeszów',
+    operatorName: 'MPK RzeszĂłw',
     type: 'bus',
     iconVariant: 'mpk_rzeszow',
     vehicleNumber,
@@ -1457,6 +1493,24 @@ async function loadRouteShapeMetadata() {
   return routeShapeMetadataPromise;
 }
 
+export function preloadRouteShapeAssets() {
+  if (typeof window === 'undefined') return;
+  void Promise.all([
+    loadShapeIndex(),
+    loadRouteStopShapeIndex(),
+    loadRouteShapeMetadata(),
+  ]).catch(() => {});
+}
+
+export function preloadTransportDetailAssets() {
+  if (typeof window === 'undefined') return;
+  void Promise.all([
+    loadStopsDictionary(),
+    loadFullStopsDictionary(),
+    loadStopPointIndex(),
+  ]).catch(() => {});
+}
+
 function safeShapeId(shapeId: string) {
   return String(shapeId || '').trim().replace(/[^a-zA-Z0-9_.+-]/g, '_');
 }
@@ -1488,6 +1542,9 @@ function nearestDistanceSq(point: ShapePoint, samples: ShapePoint[]) {
 
 function findBestShapeByStops(stops: ShapePoint[], metadata: ShapeMetadata[]) {
   if (stops.length < 2 || metadata.length === 0) return '';
+  const cacheKey = stops.map(([lat, lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
+  const cached = shapeMatchCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const minStopLat = Math.min(...stops.map(([lat]) => lat));
   const maxStopLat = Math.max(...stops.map(([lat]) => lat));
   const minStopLon = Math.min(...stops.map(([, lon]) => lon));
@@ -1519,6 +1576,11 @@ function findBestShapeByStops(stops: ShapePoint[], metadata: ShapeMetadata[]) {
     }
   }
 
+  shapeMatchCache.set(cacheKey, bestId);
+  if (shapeMatchCache.size > 400) {
+    const [firstKey] = shapeMatchCache.keys();
+    shapeMatchCache.delete(firstKey);
+  }
   return bestId;
 }
 
@@ -1855,7 +1917,7 @@ function mapTransportVehicleToClient(vehicle: TransportApiVehicle): Vehicle {
   const statusText = String(vehicle.statusText || '').toLowerCase();
   const delay =
     vehicle.provider === 'mpk_rzeszow' &&
-    (vehicle.status === 'break' || statusText.includes('petli') || statusText.includes('pętli') || statusText.includes('przystanku'))
+    (vehicle.status === 'break' || statusText.includes('petli') || statusText.includes('pÄ™tli') || statusText.includes('przystanku'))
       ? 0
       : rawDelay;
 
@@ -1955,7 +2017,6 @@ function buildRoutePath(route: any): number[] {
         .map((sp: any) => Number(typeof sp === 'object' && sp !== null ? sp.stop_point_id : sp))
         .filter((n: number) => Number.isFinite(n))
     : [];
-  if (fromStopPoints.length > 1) return fromStopPoints;
 
   const links = Array.isArray(route?.route_links)
     ? [...route.route_links].sort((a: any, b: any) => Number(a?.index ?? 0) - Number(b?.index ?? 0))
@@ -1968,7 +2029,7 @@ function buildRoutePath(route: any): number[] {
     if (fromLinks.length === 0) fromLinks.push(from);
     if (fromLinks[fromLinks.length - 1] !== to) fromLinks.push(to);
   }
-  return fromLinks;
+  return fromLinks.length > fromStopPoints.length ? fromLinks : fromStopPoints;
 }
 
 function formatClock(ts: number) {
@@ -2683,7 +2744,7 @@ export async function fetchVehicleDetailsClient(
     if (quickVehicle && (quickVehicle.schedule?.length || 0) > 1) return quickVehicle;
 
     const directVehicle = await fetchMpkRzeszowVehicleDetailsDirect(vehicleId, includeInactive).catch((error) => {
-      console.warn('MPK Rzeszów direct details unavailable, using backend:', error);
+      console.warn('MPK RzeszĂłw direct details unavailable, using backend:', error);
       return null;
     });
     if (directVehicle && (directVehicle.schedule?.length || 0) > 1) return directVehicle;
@@ -2697,7 +2758,7 @@ export async function fetchVehicleDetailsClient(
       const vehicle = response.vehicle ? mapTransportVehicleToClient(response.vehicle) : null;
       if (vehicle && (vehicle.schedule?.length || 0) > 1) return vehicle;
     } catch (error) {
-      console.warn('MPK Rzeszów details backend unavailable:', error);
+      console.warn('MPK RzeszĂłw details backend unavailable:', error);
     }
 
     return directVehicle;
@@ -2708,8 +2769,7 @@ export async function fetchVehicleDetailsClient(
     if (
       quickVehicle &&
       ((quickVehicle.routePath?.length || 0) > 1 ||
-        (quickVehicle.routeStops?.length || 0) > 1 ||
-        (quickVehicle.schedule?.length || 0) > 1)
+        (quickVehicle.routeStops?.length || 0) > 1)
     ) {
       return quickVehicle;
     }
@@ -2793,7 +2853,7 @@ async function fetchStopsFromNetwork(): Promise<StopsMap> {
 
     if (stop.stop_point_code && stop.stop_point_code.trim()) {
       let code = stop.stop_point_code.trim();
-      const isRzeszow = formattedName.includes('Rzeszow') || formattedName.includes('Rzeszów');
+      const isRzeszow = formattedName.includes('Rzeszow') || formattedName.includes('RzeszĂłw');
       const isRzeszowDA = isRzeszow && (formattedName.includes('D.A.') || formattedName.toLowerCase().includes('dworzec'));
 
       if (!isRzeszowDA && /^0\d$/.test(code)) code = code.substring(1);
@@ -2810,11 +2870,11 @@ async function fetchStopsFromNetwork(): Promise<StopsMap> {
           if (/^0+\d+$/.test(code)) code = String(Number(code));
           if (!formattedName.toLowerCase().includes('st.')) formattedName += ` st. ${code}`;
         } else {
-          // Rzeszów: zawsze pokazujemy pełny kod z wiodącym zerem, jeśli istnieje w API.
+          // RzeszĂłw: zawsze pokazujemy peĹ‚ny kod z wiodÄ…cym zerem, jeĹ›li istnieje w API.
           formattedName += ` ${stop.stop_point_code.trim()}`;
         }
       } else if (code) {
-        // Poza Rzeszowem: zawsze dopinamy kod jako suffix, żeby np. 03/04 były widoczne osobno.
+        // Poza Rzeszowem: zawsze dopinamy kod jako suffix, ĹĽeby np. 03/04 byĹ‚y widoczne osobno.
         formattedName += ` ${code}`;
       }
     }
@@ -2858,7 +2918,7 @@ function isJourneyRunning(legends: string[], dateIso: string) {
   const normalizedLegends = legends.map((legend) =>
     String(legend || '')
       .trim()
-      .replace('6Ĺ›', '6ś'),
+      .replace('6Äąâ€ş', '6Ĺ›'),
   );
   const dt = new Date(dateIso);
   const day = dt.getDay();
