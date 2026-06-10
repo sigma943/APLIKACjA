@@ -775,22 +775,6 @@ export interface StopData {
   lon: number;
 }
 
-function parseScheduleStopMs(stop: { planned?: string | null; real?: string | null }) {
-  const raw = String(stop.real || stop.planned || '').trim();
-  if (!raw) return NaN;
-  return new Date(raw.replace(' ', 'T')).getTime();
-}
-
-function isUpcomingScheduleStop(
-  stop: { planned?: string | null; real?: string | null; isPast?: boolean },
-  nowMs: number,
-) {
-  if (stop.isPast) return false;
-  const timeMs = parseScheduleStopMs(stop);
-  if (!Number.isFinite(timeMs)) return true;
-  return timeMs >= nowMs - 30 * 1000;
-}
-
 interface BusMapProps {
   vehicles: Vehicle[];
   onVehicleClick?: (vehicle: Vehicle) => void;
@@ -1602,7 +1586,6 @@ export default function BusMap({
 
   const selectedVehicle = selectedVehicleOverride || vehicles.find(v => v.id === selectedVehicleId);
   const [snappedRoute, setSnappedRoute] = useState<[number, number][]>([]);
-  const [routeClockMs, setRouteClockMs] = useState(() => Date.now());
   const refinedRouteCacheRef = useRef(new Map<string, [number, number][]>());
   const refinedRouteByVehicleRef = useRef(new Map<string, [number, number][]>());
   const selectedVehicleIdentityRef = useRef<string>('');
@@ -1638,22 +1621,19 @@ export default function BusMap({
     if (routeStops.length > 0) return dedupeStableStopIds(routeStops);
     return dedupeStableStopIds((selectedVehicle?.schedule || []).map((s: any) => s.id));
   }, [selectedVehicle]);
-  useEffect(() => {
-    if (!selectedVehicle) return;
-    const intervalId = window.setInterval(() => setRouteClockMs(Date.now()), 20_000);
-    return () => window.clearInterval(intervalId);
-  }, [selectedVehicle?.id, selectedVehicle?.provider]);
-  const selectedSchedule = useMemo(() => selectedVehicle?.schedule || [], [selectedVehicle?.schedule]);
-  const selectedLastStopId = selectedVehicle?.lastStopId;
   const visibleRouteStopIds = useMemo(() => {
-    const scheduleIds = selectedSchedule
-      .filter((stop: any) => isUpcomingScheduleStop(stop, routeClockMs))
-      .filter((stop: any) => !(selectedLastStopId && Number(stop?.id) === Number(selectedLastStopId)))
+    const scheduleIds = (selectedVehicle?.schedule || [])
+      .filter((stop: any) => !stop?.isPast)
       .map((stop: any) => stop.id)
       .filter((id: unknown) => Number.isFinite(Number(id)));
-    const upcomingIds = dedupeStableStopIds(scheduleIds);
-    return selectedSchedule.length > 0 ? upcomingIds : [];
-  }, [routeClockMs, selectedLastStopId, selectedSchedule]);
+    if (scheduleIds.length > 0) return dedupeStableStopIds(scheduleIds);
+
+    const futureRouteStopIds = (selectedVehicle?.routeStops || [])
+      .filter((stop: any) => !stop?.isPast)
+      .map((stop: any) => stop.id)
+      .filter((id: unknown) => Number.isFinite(Number(id)));
+    return futureRouteStopIds.length > 0 ? dedupeStableStopIds(futureRouteStopIds) : [];
+  }, [selectedVehicle?.routeStops, selectedVehicle?.schedule]);
   const visibleRouteStopIdsKey = useMemo(() => visibleRouteStopIds.join(','), [visibleRouteStopIds]);
   const routeGeometryStops = useMemo<RouteGeometryStop[]>(() => {
     const next: RouteGeometryStop[] = [];

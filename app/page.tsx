@@ -1633,12 +1633,7 @@ export default function Home() {
 
   const filteredVehicles = useMemo(() => {
     if (!deferredFilterRoute) return vehicles;
-    const f = deferredFilterRoute.toLowerCase();
-    return vehicles.filter(v => 
-      (v.routeShortName || '').toLowerCase().includes(f) || 
-      (v.id || '').toLowerCase().includes(f) ||
-      getVehicleDisplayNumber(v).toLowerCase().includes(f)
-    );
+    return vehicles.filter((vehicle) => matchesMapVehicleFilter(vehicle, deferredFilterRoute));
   }, [vehicles, deferredFilterRoute]);
 
   const handleMapViewportChange = useCallback((payload: { bbox: [number, number, number, number]; center: [number, number]; zoom: number }) => {

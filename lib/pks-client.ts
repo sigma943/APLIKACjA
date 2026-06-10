@@ -473,29 +473,32 @@ async function buildPksQuickDetailsFromBase(baseVehicle?: Vehicle | null): Promi
   };
   const schedule = (baseVehicle.schedule || []).map(enrichStop);
   const existingRouteStops = (baseVehicle.routeStops || []).map(enrichStop);
-  const routeStops = existingRouteStops.length > 1
-    ? existingRouteStops
-    : (baseVehicle.routePath || [])
-        .map((id): NonNullable<Vehicle['routeStops']>[number] | null => {
-          const indexed = stopIndex[String(id)];
-          const name = resolvePksStopName(id);
-          if (!indexed && isGenericStopName(name)) return null;
-          return {
-            id: Number(id),
-            name,
-            planned: null,
-            real: null,
-            lat: indexed?.lat,
-            lon: indexed?.lon,
-          };
-        })
-        .filter((stop): stop is NonNullable<Vehicle['routeStops']>[number] => Boolean(stop));
+  const routePathStops = (baseVehicle.routePath || [])
+    .map((id): NonNullable<Vehicle['routeStops']>[number] | null => {
+      const indexed = stopIndex[String(id)];
+      const name = resolvePksStopName(id);
+      if (!indexed && isGenericStopName(name)) return null;
+      return {
+        id: Number(id),
+        name,
+        planned: null,
+        real: null,
+        lat: indexed?.lat,
+        lon: indexed?.lon,
+      };
+    })
+    .filter((stop): stop is NonNullable<Vehicle['routeStops']>[number] => Boolean(stop));
+  const routeStops = routePathStops.length > existingRouteStops.length
+    ? routePathStops
+    : existingRouteStops.length > 1
+      ? existingRouteStops
+      : routePathStops;
 
   return {
     ...baseVehicle,
     schedule,
     routeStops,
-    routePath: baseVehicle.routePath || routeStops.map((stop) => stop.id),
+    routePath: routeStops.length > 1 ? routeStops.map((stop) => stop.id) : (baseVehicle.routePath || []),
   };
 }
 
