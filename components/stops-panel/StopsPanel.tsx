@@ -37,6 +37,7 @@ interface StopsPanelProps {
   vehicles: Vehicle[];
   transparentUI: boolean;
   isDarkTheme: boolean;
+  themeMode?: string;
   onRetry: () => void;
   onClose: () => void;
   onToggleFavorite: (stopId: string) => void;
@@ -1458,11 +1459,41 @@ export default function StopsPanel({
   vehicles,
   transparentUI,
   isDarkTheme,
+  themeMode,
   onRetry,
   onClose,
   onToggleFavorite,
   onShowOnMap,
 }: StopsPanelProps) {
+  const isOledTheme = themeMode === 'dark-oled';
+  const isWarmTheme = themeMode === 'light-warm';
+  const panelShellClass = transparentUI
+    ? `absolute inset-0 z-10 overflow-hidden backdrop-blur-2xl backdrop-saturate-150 ${
+        isOledTheme
+          ? 'bg-black/88'
+          : isWarmTheme
+            ? 'bg-[#f8f2e4]/92'
+            : isDarkTheme
+              ? 'bg-slate-950/88'
+              : 'bg-white/92'
+      }`
+    : `absolute inset-0 z-10 overflow-hidden ${
+        isOledTheme
+          ? 'bg-black'
+          : isWarmTheme
+            ? 'bg-[#f2ede1]'
+            : isDarkTheme
+              ? 'bg-[#03060a]'
+              : 'bg-slate-50'
+      }`;
+  const errorShellClass = isOledTheme
+    ? 'bg-black/84 text-slate-300'
+    : isWarmTheme
+      ? 'bg-[#f8f2e4]/86 text-[#3d3a2e]'
+      : isDarkTheme
+        ? 'bg-[#07111d]/70 text-slate-300'
+        : 'bg-white/80 text-slate-700';
+  const errorTextClass = isWarmTheme ? 'text-[#736e56]' : isDarkTheme ? 'text-slate-400' : 'text-slate-600';
   const [selectedStop, setSelectedStop] = useState<Stop | null>(null);
   const [mpkStops, setMpkStops] = useState<Array<{ id: string; name: string; lat?: number; lon?: number; lines: string[] }>>([]);
   const [marcelStops, setMarcelStops] = useState<MarcelIndexedStop[]>([]);
@@ -2232,11 +2263,9 @@ export default function StopsPanel({
 
   if (hasError) {
     return (
-      <div className={`flex h-full w-full items-center justify-center px-6 text-center backdrop-blur-2xl ${
-        isDarkTheme ? 'bg-[#07111d]/70 text-slate-300' : 'bg-white/80 text-slate-700'
-      }`}>
+      <div className={`flex h-full w-full items-center justify-center px-6 text-center backdrop-blur-2xl ${errorShellClass}`}>
         <div className="flex max-w-sm flex-col items-center gap-4">
-          <p className={`text-sm ${isDarkTheme ? 'text-slate-400' : 'text-slate-600'}`}>Nie udalo sie pobrac przystankow.</p>
+          <p className={`text-sm ${errorTextClass}`}>Nie udalo sie pobrac przystankow.</p>
           <button
             type="button"
             onClick={onRetry}
@@ -2254,15 +2283,7 @@ export default function StopsPanel({
   }
 
   return (
-    <div
-      className={
-        transparentUI
-          ? `absolute inset-0 z-10 overflow-hidden backdrop-blur-2xl backdrop-saturate-150 ${
-              isDarkTheme ? 'bg-slate-950/88' : 'bg-white/92'
-            }`
-          : `absolute inset-0 z-10 overflow-hidden ${isDarkTheme ? 'bg-[#03060a]' : 'bg-slate-50'}`
-      }
-    >
+    <div className={panelShellClass}>
       <div className="h-full w-full">
         {currentSelectedStop ? (
           <BusStopDetail
@@ -2272,6 +2293,7 @@ export default function StopsPanel({
             loadDepartures={loadDepartures}
             onShowOnMap={onShowOnMap}
             isDarkTheme={isDarkTheme}
+            themeMode={themeMode}
           />
         ) : (
           <StopList
@@ -2282,6 +2304,7 @@ export default function StopsPanel({
             toggleFavorite={toggleFavorite}
             isFullScreen
             isDarkTheme={isDarkTheme}
+            themeMode={themeMode}
             searchState={stopsSearchState}
             onSearchStateChange={(patch) => setStopsSearchState((current) => ({ ...current, ...patch }))}
           />

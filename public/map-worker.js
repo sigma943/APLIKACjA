@@ -2,7 +2,7 @@ self.onmessage = (event) => {
   const { id, type, payload } = event.data || {};
   try {
     if (type === 'route:validate') {
-      self.postMessage({ id, ok: true, result: validateRoute(payload.points || [], payload.stops || []) });
+      self.postMessage({ id, ok: true, result: validateRoute(payload.points || [], payload.stops || [], payload.options || {}) });
       return;
     }
     if (type === 'markers:cluster') {
@@ -61,7 +61,7 @@ function distanceToRouteMeters(point, route) {
   return best;
 }
 
-function validateRoute(points, stops) {
+function validateRoute(points, stops, options) {
   const route = points
     .filter((point) => Array.isArray(point) && point.length === 2 && Number.isFinite(point[0]) && Number.isFinite(point[1]));
   const cleanStops = stops
@@ -90,7 +90,10 @@ function validateRoute(points, stops) {
   for (let index = 1; index < cleanStops.length - 1; index += 1) {
     const stop = cleanStops[index];
     const distance = distanceToRouteMeters([stop.lat, stop.lon], route);
-    const tolerance = cleanStops.length > 45 ? 320 : 240;
+    const requestedTolerance = Number(options?.stopToleranceMeters);
+    const tolerance = Number.isFinite(requestedTolerance) && requestedTolerance > 0
+      ? requestedTolerance
+      : cleanStops.length > 45 ? 320 : 240;
     if (distance > tolerance) {
       missedStops.push({ id: stop.id, sequence: stop.sequence, distance });
       if (missedStops.length > 8) break;

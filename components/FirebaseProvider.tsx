@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import { auth, db, functions } from '@/lib/firebase';
 import { signInAnonymously, onAuthStateChanged, User } from 'firebase/auth';
@@ -199,6 +199,12 @@ async function registerDeviceIdentityWithFallback(
   }
 }
 
+function isMissingDocumentError(error: unknown) {
+  const code = String((error as any)?.code || '').toLowerCase();
+  const message = String((error as any)?.message || String(error)).toLowerCase();
+  return code.includes('not-found') || message.includes('no document') || message.includes('not-found');
+}
+
 export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [device, setDevice] = useState<DeviceData | null>(null);
@@ -217,6 +223,14 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [localLastSeenMs, setLocalLastSeenMs] = useState<number | null>(null);
   const [hiddenProviderIds, setHiddenProviderIds] = useState<string[]>(() => readHiddenProviderIdsCache());
   const [registrationRetryTick, setRegistrationRetryTick] = useState(0);
+  const registrationOkRef = useRef(false);
+  const registrationInFlightRef = useRef(false);
+  const scheduleRegistrationRetry = (delayMs = Capacitor.isNativePlatform() ? 5000 : 12000) => {
+    window.setTimeout(() => {
+      registrationOkRef.current = false;
+      setRegistrationRetryTick((value) => value + 1);
+    }, delayMs);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -285,17 +299,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
           await signInAnonymously(auth);
         } catch (e: any) {
           console.error("Anonymous sign-in failed", e);
-          // Fallback for testing if Anonymous Auth is disabled in Firebase Console
-          if (e.code === 'auth/admin-restricted-operation' || e.message?.includes('admin-restricted-operation')) {
-            console.warn("Anonymous Auth is disabled in Firebase Console. Using fallback guest ID for testing.");
-            let guestId = localStorage.getItem('guest_uid');
-            if (!guestId) {
-              guestId = 'guest_' + Math.random().toString(36).substring(2, 15);
-              localStorage.setItem('guest_uid', guestId);
-            }
-            // Mock user object for context
-            setUser({ uid: guestId, isAnonymous: true } as User);
-          }
+          window.setTimeout(() => signInAnonymously(auth).catch(() => {}), Capacitor.isNativePlatform() ? 5000 : 12000);
         }
       }
     });
@@ -377,22 +381,28 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
     let retryTimer: number | null = null;
 
     (async () => {
-      const instId = await getOrCreateInstallationId();
-      // #region agent log
-      agentLog(
-        'FirebaseProvider.tsx:registerIdentity:before',
-        'Registering device identity via Firestore',
-        {
-          uidPrefix: user.uid.slice(0, 8),
-          installationIdPrefix: instId.slice(0, 12),
-        },
-        'H5',
-      );
-      // #endregion
+      if (registrationInFlightRef.current) return;
+      registrationInFlightRef.current = true;
       try {
+        const instId = await getOrCreateInstallationId();
+        // #region agent log
+        agentLog(
+          'FirebaseProvider.tsx:registerIdentity:before',
+          'Registering device identity via Firestore',
+          {
+            uidPrefix: user.uid.slice(0, 8),
+            installationIdPrefix: instId.slice(0, 12),
+          },
+          'H5',
+        );
+        // #endregion
         const deviceInfo = await getClientDeviceInfo();
         try {
           await registerDeviceIdentityWithFallback(user, { installationId: instId, deviceInfo });
+          const savedSnap = await getDoc(deviceRef);
+          if (!savedSnap.exists()) {
+            throw new Error('Device registration returned success but devices/{uid} does not exist.');
+          }
           agentLog(
             'FirebaseProvider.tsx:registerIdentity:functionOk',
             'Device identity saved via Cloud Function',
@@ -402,8 +412,12 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
             },
             'H5',
           );
+          registrationOkRef.current = true;
           setLocalLastSeenMs(Date.now());
-          updateDoc(deviceRef, { lastSeenAt: serverTimestamp() }).catch(() => {});
+          await updateDoc(deviceRef, { lastSeenAt: serverTimestamp(), deviceInfo }).catch(async (heartbeatError) => {
+            if (isMissingDocumentError(heartbeatError)) throw heartbeatError;
+            await updateDoc(deviceRef, { lastSeenAt: serverTimestamp() });
+          });
           return;
         } catch (fnErr) {
           console.warn('Cloud Function device registration unavailable, using Firestore fallback', fnErr);
@@ -502,6 +516,12 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
             { merge: true },
           ).catch(() => {});
         }
+        const confirmedSnap = await getDoc(deviceRef);
+        if (!confirmedSnap.exists()) {
+          throw new Error('Firestore fallback completed but devices/{uid} does not exist.');
+        }
+        registrationOkRef.current = true;
+        setLocalLastSeenMs(Date.now());
         // #region agent log
         agentLog(
           'FirebaseProvider.tsx:registerIdentity:ok',
@@ -527,9 +547,12 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
         // #endregion
         if (!cancelled) {
           retryTimer = window.setTimeout(() => {
+            registrationOkRef.current = false;
             setRegistrationRetryTick((value) => value + 1);
           }, Capacitor.isNativePlatform() ? 7000 : 15000);
         }
+      } finally {
+        registrationInFlightRef.current = false;
       }
     })();
 
@@ -595,21 +618,38 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
     if (!user?.uid || user.uid.startsWith('guest_')) return;
 
     const deviceRef = doc(db, 'devices', user.uid);
+    let nativeAppListenerPromise: Promise<{ remove: () => Promise<void> }> | null = null;
     const ping = () => {
       setLocalLastSeenMs(Date.now());
-      updateDoc(deviceRef, { lastSeenAt: serverTimestamp() }).catch(() => {});
+      updateDoc(deviceRef, { lastSeenAt: serverTimestamp() }).catch((error) => {
+        registrationOkRef.current = false;
+        if (isMissingDocumentError(error) || Capacitor.isNativePlatform()) {
+          scheduleRegistrationRetry(isMissingDocumentError(error) ? 500 : 5000);
+        }
+      });
     };
 
-    ping();
-    const interval = window.setInterval(ping, 30_000);
+    if (registrationOkRef.current || device) ping();
+    else scheduleRegistrationRetry(1200);
+    const interval = window.setInterval(ping, Capacitor.isNativePlatform() ? 20_000 : 30_000);
     const onVis = () => {
       if (document.visibilityState === 'visible') ping();
     };
     document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', ping);
+    if (Capacitor.isNativePlatform()) {
+      nativeAppListenerPromise = import('@capacitor/app').then(({ App }) =>
+        App.addListener('appStateChange', (state) => {
+          if (state.isActive) ping();
+        }),
+      );
+    }
 
     return () => {
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', ping);
+      nativeAppListenerPromise?.then((listener) => listener.remove()).catch(() => {});
     };
   }, [user]);
 

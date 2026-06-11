@@ -24,6 +24,8 @@ function isRzeszowCityPoint(lat?: number, lon?: number) {
 function shouldKeepStopNumber(stop?: Pick<Stop, 'name' | 'lat' | 'lon' | 'sourceProviderIds'> | null) {
   const name = normalizeAscii(stop?.name);
   if (/^rzeszow\b/.test(name)) return true;
+  if (stop?.sourceProviderIds?.includes('pks')) return true;
+  if (/\b(?:st|skr)\.?\s*\d{1,3}[a-z]?\b/i.test(name)) return true;
   return Boolean(stop?.sourceProviderIds?.includes('mpk_rzeszow') && isRzeszowCityPoint(stop.lat, stop.lon));
 }
 

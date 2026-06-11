@@ -15,6 +15,7 @@ interface BusStopDetailProps {
   loadDepartures: (stop: Stop, dayIndex?: number) => Promise<Departure[]>;
   onShowOnMap?: (stop: Stop) => void;
   isDarkTheme?: boolean;
+  themeMode?: string;
 }
 
 function getDynamicDays() {
@@ -50,7 +51,7 @@ function getDynamicDays() {
   return days;
 }
 
-export default function BusStopDetail({ stop, onBack, toggleFavorite, loadDepartures, onShowOnMap, isDarkTheme = true }: BusStopDetailProps) {
+export default function BusStopDetail({ stop, onBack, toggleFavorite, loadDepartures, onShowOnMap, isDarkTheme = true, themeMode }: BusStopDetailProps) {
   const [days] = useState(getDynamicDays);
   const [selectedLine, setSelectedLine] = useState<string>('all');
   const [showAllDepartures, setShowAllDepartures] = useState(false);
@@ -249,37 +250,71 @@ export default function BusStopDetail({ stop, onBack, toggleFavorite, loadDepart
   const visibleLimit = showAllDepartures ? visibleDepartureLimit : INITIAL_DEPARTURE_LIMIT;
   const displayedDepartures = activeDepartures.slice(0, visibleLimit);
   const hasMoreDepartures = activeDepartures.length > displayedDepartures.length;
-  const panelShellClass = isDarkTheme ? 'bg-[#05080c]/94 text-slate-200' : 'bg-white/96 text-slate-900';
-  const headerShellClass = isDarkTheme ? 'bg-slate-900/96 border-white/10' : 'bg-white/98 border-slate-200';
-  const surfaceClass = isDarkTheme ? 'bg-[#0d1622]/92 border-white/[0.08]' : 'bg-white/98 border-slate-200';
-  const departuresCardClass = isDarkTheme ? 'bg-[#0b121e]/96 border-white/[0.10]' : 'bg-white border-slate-200';
-  const headingTextClass = isDarkTheme ? 'text-white' : 'text-slate-900';
-  const mutedTextClass = isDarkTheme ? 'text-slate-400' : 'text-slate-600';
-  const subtleTextClass = isDarkTheme ? 'text-slate-500' : 'text-slate-500';
-  const headerOverlayClass = isDarkTheme ? 'bg-[#05080c]/72' : 'bg-white/78';
-  const headerGradientClass = isDarkTheme
-    ? 'bg-gradient-to-bl from-teal-900/24 via-[#05080c]/22 to-[#05080c]/30'
-    : 'bg-gradient-to-bl from-teal-100/40 via-white/40 to-cyan-50/45';
-  const headerIconButtonClass = isDarkTheme
-    ? 'text-white hover:bg-white/10 border-white/5 hover:border-white/10'
-    : 'text-slate-700 hover:bg-slate-200/60 border-slate-300 hover:border-slate-400';
-  const mapButtonClass = isDarkTheme
-    ? 'bg-white/10 hover:bg-white/15 border-white/15 text-slate-100'
-    : 'bg-white/70 hover:bg-white border-slate-300 text-slate-700';
-  const dayInactiveClass = isDarkTheme
-    ? 'bg-[#121f31]/40 text-slate-400 border-white/[0.03] hover:bg-white/[0.04] hover:text-slate-200'
-    : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-white hover:text-slate-800';
+  const isOledTheme = themeMode === 'dark-oled';
+  const isWarmTheme = themeMode === 'light-warm';
+  const panelShellClass = isOledTheme
+    ? 'bg-black/94 text-slate-200'
+    : isWarmTheme
+      ? 'bg-[#f8f2e4]/96 text-[#3d3a2e]'
+      : isDarkTheme ? 'bg-[#05080c]/94 text-slate-200' : 'bg-white/96 text-slate-900';
+  const headerShellClass = isOledTheme
+    ? 'bg-black/96 border-white/10'
+    : isWarmTheme
+      ? 'bg-[#faf7ef]/98 border-[#dcd6ba]'
+      : isDarkTheme ? 'bg-slate-900/96 border-white/10' : 'bg-white/98 border-slate-200';
+  const surfaceClass = isOledTheme
+    ? 'bg-white/[0.035] border-white/[0.08]'
+    : isWarmTheme
+      ? 'bg-[#faf7ef]/92 border-[#dcd6ba]'
+      : isDarkTheme ? 'bg-[#0d1622]/92 border-white/[0.08]' : 'bg-white/98 border-slate-200';
+  const departuresCardClass = isOledTheme
+    ? 'bg-black/92 border-white/[0.10]'
+    : isWarmTheme
+      ? 'bg-[#faf7ef] border-[#dcd6ba]'
+      : isDarkTheme ? 'bg-[#0b121e]/96 border-white/[0.10]' : 'bg-white border-slate-200';
+  const headingTextClass = isWarmTheme ? 'text-[#2f2a1f]' : isDarkTheme ? 'text-white' : 'text-slate-900';
+  const mutedTextClass = isWarmTheme ? 'text-[#736e56]' : isDarkTheme ? 'text-slate-400' : 'text-slate-600';
+  const subtleTextClass = isWarmTheme ? 'text-[#918b74]' : 'text-slate-500';
+  const headerOverlayClass = isOledTheme
+    ? 'bg-black/72'
+    : isWarmTheme
+      ? 'bg-[#f8f2e4]/78'
+      : isDarkTheme ? 'bg-[#05080c]/72' : 'bg-white/78';
+  const headerGradientClass = isOledTheme
+    ? 'bg-gradient-to-bl from-teal-900/16 via-black/20 to-black/28'
+    : isWarmTheme
+      ? 'bg-gradient-to-bl from-teal-100/28 via-[#faf7ef]/42 to-[#f2ede1]/55'
+      : isDarkTheme
+        ? 'bg-gradient-to-bl from-teal-900/24 via-[#05080c]/22 to-[#05080c]/30'
+        : 'bg-gradient-to-bl from-teal-100/40 via-white/40 to-cyan-50/45';
+  const headerIconButtonClass = isWarmTheme
+    ? 'text-[#3d3a2e] hover:bg-[#e6e0cc]/70 border-[#dcd6ba] hover:border-[#cfc89f]'
+    : isDarkTheme
+      ? 'text-white hover:bg-white/10 border-white/5 hover:border-white/10'
+      : 'text-slate-700 hover:bg-slate-200/60 border-slate-300 hover:border-slate-400';
+  const mapButtonClass = isWarmTheme
+    ? 'bg-[#faf7ef]/70 hover:bg-[#faf7ef] border-[#dcd6ba] text-[#3d3a2e]'
+    : isDarkTheme
+      ? 'bg-white/10 hover:bg-white/15 border-white/15 text-slate-100'
+      : 'bg-white/70 hover:bg-white border-slate-300 text-slate-700';
+  const dayInactiveClass = isOledTheme
+    ? 'bg-white/[0.035] text-slate-400 border-white/[0.04] hover:bg-white/[0.06] hover:text-slate-200'
+    : isWarmTheme
+      ? 'bg-[#e6e0cc]/50 text-[#736e56] border-[#dcd6ba] hover:bg-[#faf7ef] hover:text-[#3d3a2e]'
+      : isDarkTheme
+        ? 'bg-[#121f31]/40 text-slate-400 border-white/[0.03] hover:bg-white/[0.04] hover:text-slate-200'
+        : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-white hover:text-slate-800';
   const dayActiveClass = isDarkTheme
     ? 'bg-[#14b8a6]/15 text-teal-300 border-[#14b8a6]'
     : 'bg-teal-100 text-teal-700 border-teal-400/70';
-  const rowClass = isDarkTheme
-    ? 'hover:bg-white/[0.02]'
-    : 'hover:bg-slate-100/65';
-  const rowBorderClass = isDarkTheme ? 'border-white/[0.03]' : 'border-slate-200/95';
-  const skeletonRowClass = isDarkTheme
-    ? 'bg-white/[0.01] border-white/[0.01]'
-    : 'bg-slate-100/85 border-slate-200';
-  const skeletonBlockClass = isDarkTheme ? 'bg-white/5' : 'bg-slate-200';
+  const rowClass = isWarmTheme ? 'hover:bg-[#e6e0cc]/35' : isDarkTheme ? 'hover:bg-white/[0.02]' : 'hover:bg-slate-100/65';
+  const rowBorderClass = isWarmTheme ? 'border-[#dcd6ba]/80' : isDarkTheme ? 'border-white/[0.03]' : 'border-slate-200/95';
+  const skeletonRowClass = isWarmTheme
+    ? 'bg-[#faf7ef]/60 border-[#dcd6ba]'
+    : isDarkTheme
+      ? 'bg-white/[0.01] border-white/[0.01]'
+      : 'bg-slate-100/85 border-slate-200';
+  const skeletonBlockClass = isWarmTheme ? 'bg-[#e6e0cc]' : isDarkTheme ? 'bg-white/5' : 'bg-slate-200';
   const formatDepartureTime = (departure: Departure) => {
     if (selectedDay !== 'today') return departure.time;
     if (!currentTimeMs) return departure.time;

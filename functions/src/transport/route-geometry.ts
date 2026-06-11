@@ -44,7 +44,7 @@ const MAX_SEGMENT_DISTANCE_METERS = 350_000;
 const MAX_RAIL_SEGMENT_DISTANCE_METERS = 180_000;
 const MIN_SEGMENT_DISTANCE_METERS = 8;
 const OVERPASS_API_URL = process.env.OVERPASS_API_URL || 'https://overpass-api.de/api/interpreter';
-const ROUTE_GEOMETRY_ALGORITHM_VERSION = 'hybrid-v3';
+const ROUTE_GEOMETRY_ALGORITHM_VERSION = 'hybrid-v4';
 const FIRESTORE_ROUTE_GEOMETRY_COLLECTION = 'route_geometries';
 
 type RouteCacheIdentity = {

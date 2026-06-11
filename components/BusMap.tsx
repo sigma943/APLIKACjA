@@ -11,12 +11,14 @@ const PKS_COLOR = '#14b8a6';
 const MPK_RZESZOW_COLOR = '#ff7a00';
 const MARCEL_COLOR = '#68c44a';
 const PKP_INTERCITY_COLOR = '#1d4ed8';
-const ROAD_ROUTE_GEOMETRY_CACHE_VERSION = 'road-v11';
+const ROAD_ROUTE_GEOMETRY_CACHE_VERSION = 'road-v12';
 const RAIL_ROUTE_GEOMETRY_CACHE_VERSION = 'rail-v1';
 const ROUTE_GEOMETRY_LOCAL_PREFIX = 'routeGeometry:';
 const ROUTE_GEOMETRY_DB_NAME = 'pks-live-route-geometry';
 const ROUTE_GEOMETRY_DB_VERSION = 1;
 const ROUTE_GEOMETRY_DB_STORE = 'routes';
+const ROUTE_PREWARM_BATCH_SIZE = 4;
+const ROUTE_PREWARM_MAX_STOPS = 64;
 let routeGeometryDbPromise: Promise<IDBDatabase | null> | null = null;
 let mapWorkerRef: Worker | null = null;
 let mapWorkerRequestId = 0;
@@ -133,12 +135,6 @@ function keepFullRouteForPaint(points: [number, number][]) {
   return points.filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
 }
 
-function buildInstantStopRoute(stops: RouteGeometryStop[]): [number, number][] {
-  return stops
-    .filter((stop) => Number.isFinite(stop.lat) && Number.isFinite(stop.lon))
-    .map((stop) => [Number(stop.lat), Number(stop.lon)] as [number, number]);
-}
-
 function routePaintDistanceMeters(a: [number, number], b: [number, number]) {
   const meanLat = ((a[0] + b[0]) / 2) * Math.PI / 180;
   const metersPerLat = 111_320;
@@ -184,21 +180,29 @@ function distanceToRouteMeters(point: [number, number], route: [number, number][
   return best;
 }
 
-function routeCoversIntermediateStops(points: [number, number][], stops: RouteGeometryStop[]) {
+function routeCoversIntermediateStops(points: [number, number][], stops: RouteGeometryStop[], toleranceOverride?: number) {
   if (stops.length <= 2) return true;
 
   for (let index = 1; index < stops.length - 1; index += 1) {
     const stop = stops[index];
     const point: [number, number] = [Number(stop.lat), Number(stop.lon)];
     if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) continue;
-    const tolerance = stops.length > 45 ? 320 : 240;
+    const tolerance = Number.isFinite(toleranceOverride)
+      ? Number(toleranceOverride)
+      : stops.length > 45 ? 320 : 240;
     if (distanceToRouteMeters(point, points) > tolerance) return false;
   }
 
   return true;
 }
 
-function isCompleteRouteGeometry(points: [number, number][], stops: RouteGeometryStop[]) {
+function routeStopToleranceMeters(provider?: string) {
+  if (provider === 'mpk_rzeszow') return undefined;
+  if (provider === 'pks' || provider === 'marcel') return 850;
+  return undefined;
+}
+
+function isCompleteRouteGeometry(points: [number, number][], stops: RouteGeometryStop[], provider?: string) {
   if (points.length < 2 || stops.length < 2) return false;
   const firstStop = stops[0];
   const lastStop = stops[stops.length - 1];
@@ -219,16 +223,20 @@ function isCompleteRouteGeometry(points: [number, number][], stops: RouteGeometr
   return startDistance <= endpointTolerance &&
     endDistance <= endpointTolerance &&
     routeDistance >= directDistance * 0.72 &&
-    routeCoversIntermediateStops(points, stops);
+    routeCoversIntermediateStops(points, stops, routeStopToleranceMeters(provider));
 }
 
-async function isCompleteRouteGeometryAsync(points: [number, number][], stops: RouteGeometryStop[]) {
+async function isCompleteRouteGeometryAsync(points: [number, number][], stops: RouteGeometryStop[], provider?: string) {
   if (points.length < 2 || stops.length < 2) return false;
   try {
-    const validation = await requestMapWorker<WorkerRouteValidation>('route:validate', { points, stops });
+    const validation = await requestMapWorker<WorkerRouteValidation>('route:validate', {
+      points,
+      stops,
+      options: { stopToleranceMeters: routeStopToleranceMeters(provider) },
+    });
     return validation.complete === true;
   } catch {
-    return isCompleteRouteGeometry(points, stops);
+    return isCompleteRouteGeometry(points, stops, provider);
   }
 }
 
@@ -453,6 +461,65 @@ function MapStateTracker({
     },
   });
   return null;
+}
+
+function buildVehicleRouteGeometryStops(
+  vehicle: Vehicle,
+  baseStopsData?: Record<string, StopData> | null,
+): { stopIds: Array<string | number>; stopsData: Record<string, StopData>; geometryStops: RouteGeometryStop[] } {
+  const routePath = vehicle.routePath?.filter((id) => Number.isFinite(Number(id))) || [];
+  const routeStopIds = routePath.length > 1
+    ? dedupeStableStopIds(routePath)
+    : dedupeStableStopIds(
+        (vehicle.routeStops?.length ? vehicle.routeStops : vehicle.schedule || [])
+          .map((stop) => stop.id)
+          .filter((id) => Number.isFinite(Number(id))),
+      );
+
+  const mergedStopsData: Record<string, StopData> = { ...(baseStopsData || {}) };
+  for (const stop of [...(vehicle.routeStops || []), ...(vehicle.schedule || [])]) {
+    const lat = Number(stop.lat);
+    const lon = Number(stop.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    mergedStopsData[String(stop.id)] = {
+      n: stop.name || mergedStopsData[String(stop.id)]?.n || String(stop.id),
+      lat,
+      lon,
+    };
+  }
+
+  const geometryStops: RouteGeometryStop[] = [];
+  for (let index = 0; index < routeStopIds.length; index += 1) {
+    const stopId = routeStopIds[index];
+    const stop = mergedStopsData[String(stopId)];
+    if (!stop || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lon)) continue;
+    geometryStops.push({
+      id: stopId,
+      name: stop.n,
+      lat: Number(stop.lat),
+      lon: Number(stop.lon),
+      sequence: index,
+    });
+  }
+
+  return { stopIds: routeStopIds, stopsData: mergedStopsData, geometryStops };
+}
+
+function routeCacheKeyForVehicle(vehicle: Vehicle, geometryStops: RouteGeometryStop[], mode: 'road' | 'rail' = 'road') {
+  const line = normalizeRouteCachePart(vehicle.routeShortName || vehicle.routeId || vehicle.name || '');
+  const direction = normalizeRouteCachePart(
+    vehicle.direction ||
+    geometryStops[geometryStops.length - 1]?.name ||
+    vehicle.routeId ||
+    '',
+  );
+  return [
+    mode,
+    normalizeRouteCachePart(vehicle.provider || 'pks'),
+    line,
+    direction,
+    hashRouteGeometryStops(geometryStops),
+  ].join(':');
 }
 
 function useCachedMapTiles() {
@@ -1584,6 +1651,8 @@ export default function BusMap({
   const [snappedRouteOwner, setSnappedRouteOwner] = useState('');
   const refinedRouteCacheRef = useRef(new Map<string, [number, number][]>());
   const refinedRouteByVehicleRef = useRef(new Map<string, [number, number][]>());
+  const prewarmedRouteKeysRef = useRef(new Set<string>());
+  const prewarmRunningRef = useRef(false);
   const selectedVehicleIdentityRef = useRef<string>('');
   const routeAbortRef = useRef<AbortController | null>(null);
   const activeRouteRequestIdRef = useRef(0);
@@ -1705,6 +1774,114 @@ export default function BusMap({
     : [];
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!stopsData || Object.keys(stopsData).length < 2) return;
+    if (prewarmRunningRef.current) return;
+
+    const candidates: Array<{
+      vehicle: Vehicle;
+      routeKey: string;
+      stopIds: Array<string | number>;
+      stopsData: Record<string, StopData>;
+      geometryStops: RouteGeometryStop[];
+    }> = [];
+    const seenKeys = new Set<string>();
+
+    for (const vehicle of vehicles) {
+      if (vehicle.provider !== 'pks' && vehicle.provider !== 'marcel') continue;
+      if (vehicle.status === 'inactive' || vehicle.status === 'technical') continue;
+      const { stopIds, stopsData: vehicleStopsData, geometryStops } = buildVehicleRouteGeometryStops(vehicle, stopsData);
+      if (geometryStops.length < 3 || geometryStops.length > ROUTE_PREWARM_MAX_STOPS) continue;
+      const candidateKey = routeCacheKeyForVehicle(vehicle, geometryStops, 'road');
+      if (seenKeys.has(candidateKey) || prewarmedRouteKeysRef.current.has(candidateKey)) continue;
+      if (refinedRouteCacheRef.current.has(candidateKey)) continue;
+      seenKeys.add(candidateKey);
+      candidates.push({ vehicle, routeKey: candidateKey, stopIds, stopsData: vehicleStopsData, geometryStops });
+      if (candidates.length >= ROUTE_PREWARM_BATCH_SIZE) break;
+    }
+
+    if (candidates.length === 0) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      prewarmRunningRef.current = true;
+      (async () => {
+        try {
+          for (const candidate of candidates) {
+            if (cancelled) return;
+            prewarmedRouteKeysRef.current.add(candidate.routeKey);
+            const stored = await readPersistentRouteGeometry(candidate.routeKey, ROAD_ROUTE_GEOMETRY_CACHE_VERSION);
+            if (cancelled) return;
+            if (await isCompleteRouteGeometryAsync(stored, candidate.geometryStops, candidate.vehicle.provider)) {
+              const refinedStored = keepFullRouteForPaint(stored);
+              refinedRouteCacheRef.current.set(candidate.routeKey, refinedStored);
+              continue;
+            }
+
+            const tripKey = String(
+              candidate.vehicle.tripId ||
+              candidate.vehicle.journeyId ||
+              candidate.vehicle.serviceId ||
+              candidate.vehicle.routeId ||
+              '',
+            );
+            const officialRoute = await fetchRouteShapeClient(
+              tripKey,
+              candidate.stopIds,
+              candidate.stopsData,
+              {
+                refineTimeoutMs: 2200,
+                disableSyntheticFallback: true,
+                strictShortSegments: false,
+              },
+            ).catch(() => [] as [number, number][]);
+            if (cancelled) return;
+            if (await isCompleteRouteGeometryAsync(officialRoute, candidate.geometryStops, candidate.vehicle.provider)) {
+              const refinedOfficial = keepFullRouteForPaint(officialRoute);
+              refinedRouteCacheRef.current.set(candidate.routeKey, refinedOfficial);
+              writePersistentRouteGeometry(candidate.routeKey, refinedOfficial, ROAD_ROUTE_GEOMETRY_CACHE_VERSION);
+              continue;
+            }
+
+            const response = await fetchRouteGeometryClient({
+              carrier: candidate.vehicle.provider || 'pks',
+              line: candidate.vehicle.routeShortName || candidate.vehicle.routeId || candidate.vehicle.name || 'unknown',
+              direction: candidate.vehicle.direction || candidate.geometryStops[candidate.geometryStops.length - 1]?.name || 'unknown',
+              variant: String(
+                candidate.vehicle.tripId ||
+                candidate.vehicle.journeyId ||
+                candidate.vehicle.serviceId ||
+                candidate.vehicle.brigadeName ||
+                candidate.vehicle.routeId ||
+                'default',
+              ),
+              dataVersion: ROAD_ROUTE_GEOMETRY_CACHE_VERSION,
+              mode: 'road',
+              stops: candidate.geometryStops,
+            }).catch(() => null);
+            if (cancelled) return;
+            if (!response) continue;
+            const points = (response.geometry?.coordinates || [])
+              .map(([lon, lat]) => [lat, lon] as [number, number])
+              .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
+            if (await isCompleteRouteGeometryAsync(points, candidate.geometryStops, candidate.vehicle.provider)) {
+              const refinedRoute = keepFullRouteForPaint(points);
+              refinedRouteCacheRef.current.set(candidate.routeKey, refinedRoute);
+              writePersistentRouteGeometry(candidate.routeKey, refinedRoute, ROAD_ROUTE_GEOMETRY_CACHE_VERSION);
+            }
+          }
+        } finally {
+          prewarmRunningRef.current = false;
+        }
+      })();
+    }, 1800);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [vehicles, stopsData]);
+
+  useEffect(() => {
     activeRouteRequestIdRef.current += 1;
     const requestId = activeRouteRequestIdRef.current;
     routeAbortRef.current?.abort();
@@ -1733,18 +1910,8 @@ export default function BusMap({
       !controller.signal.aborted &&
       selectedVehicleIdentityRef.current === currentIdentity;
 
-    if (
-      (selectedVehicle.provider === 'pks' || selectedVehicle.provider === 'marcel') &&
-      !refinedRouteCacheRef.current.has(routeKey)
-    ) {
-      const instantRoute = buildInstantStopRoute(routeGeometryStops);
-      if (instantRoute.length > 1) {
-        setOwnedSnappedRoute(currentIdentity, instantRoute);
-      }
-    }
-
     const memoryRoute = routeShapeHash ? undefined : refinedRouteCacheRef.current.get(routeKey);
-    if (memoryRoute && isCompleteRouteGeometry(memoryRoute, routeGeometryStops)) {
+    if (memoryRoute && isCompleteRouteGeometry(memoryRoute, routeGeometryStops, selectedVehicle.provider)) {
       setOwnedSnappedRoute(currentIdentity, memoryRoute);
       refinedRouteByVehicleRef.current.set(currentIdentity, memoryRoute);
       return;
@@ -1763,7 +1930,7 @@ export default function BusMap({
             Number.isFinite(point[1]),
           )
         : [];
-      if (await isCompleteRouteGeometryAsync(apiRoute, routeGeometryStops)) {
+      if (await isCompleteRouteGeometryAsync(apiRoute, routeGeometryStops, selectedVehicle.provider)) {
         if (!isCurrentRequest()) return;
         const refinedApiRoute = keepFullRouteForPaint(apiRoute);
         refinedRouteCacheRef.current.set(routeKey, refinedApiRoute);
@@ -1775,7 +1942,7 @@ export default function BusMap({
 
       const localRoute = await readPersistentRouteGeometry(routeKey, routeGeometryVersion);
       if (!isCurrentRequest()) return;
-      if (await isCompleteRouteGeometryAsync(localRoute, routeGeometryStops)) {
+      if (await isCompleteRouteGeometryAsync(localRoute, routeGeometryStops, selectedVehicle.provider)) {
         if (!isCurrentRequest()) return;
         const refinedLocalRoute = keepFullRouteForPaint(localRoute);
         refinedRouteCacheRef.current.set(routeKey, refinedLocalRoute);
@@ -1796,14 +1963,14 @@ export default function BusMap({
             routeStopIds,
             routeStopsData,
             {
-              refineTimeoutMs: 900,
+              refineTimeoutMs: selectedVehicle.provider === 'mpk_rzeszow' ? 900 : 2200,
               disableSyntheticFallback: true,
               strictShortSegments: selectedVehicle.provider === 'mpk_rzeszow',
             },
           ).catch(() => [])
         : [];
       if (!isCurrentRequest()) return;
-      if (await isCompleteRouteGeometryAsync(officialRoute, routeGeometryStops)) {
+      if (await isCompleteRouteGeometryAsync(officialRoute, routeGeometryStops, selectedVehicle.provider)) {
         if (!isCurrentRequest()) return;
         const refinedOfficialRoute = keepFullRouteForPaint(officialRoute);
         refinedRouteCacheRef.current.set(routeKey, refinedOfficialRoute);
@@ -1833,7 +2000,7 @@ export default function BusMap({
         const points = (response.geometry?.coordinates || [])
           .map(([lon, lat]) => [lat, lon] as [number, number])
           .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
-        if (await isCompleteRouteGeometryAsync(points, routeGeometryStops)) {
+        if (await isCompleteRouteGeometryAsync(points, routeGeometryStops, selectedVehicle.provider)) {
           if (!isCurrentRequest()) return;
           const refinedRoute = keepFullRouteForPaint(points);
           refinedRouteCacheRef.current.set(routeKey, refinedRoute);

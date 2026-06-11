@@ -12,6 +12,7 @@ interface StopListProps {
   isFullScreen?: boolean;
   isLoading?: boolean;
   isDarkTheme?: boolean;
+  themeMode?: string;
   searchState?: {
     inputValue: string;
     fullInputValue: string;
@@ -71,6 +72,7 @@ export default function StopList({
   isFullScreen = false,
   isLoading = false,
   isDarkTheme = true,
+  themeMode,
   searchState,
   onSearchStateChange,
 }: StopListProps) {
@@ -135,22 +137,85 @@ export default function StopList({
   );
   const displayStops = useMemo(() => filteredStops.slice(0, 30), [filteredStops]);
   const slicedFullStops = useMemo(() => fullFilteredStops.slice(0, visibleFullCount), [fullFilteredStops, visibleFullCount]);
-  const shellClass = isDarkTheme ? 'text-slate-200' : 'text-slate-800';
-  const headerClass = isDarkTheme
-    ? 'border-white/[0.08] bg-[#07111d]/30 shadow-[0_18px_60px_rgba(0,0,0,0.16)]'
-    : 'border-slate-200/80 bg-white/96 shadow-[0_18px_40px_rgba(15,23,42,0.10)]';
-  const searchInputClass = isDarkTheme
-    ? 'border-white/12 bg-[#0e1622]/34 text-white shadow-black/18 placeholder:text-slate-400/75 focus:border-teal-500/40 focus:ring-teal-500/20'
-    : 'border-slate-300/90 bg-white/90 text-slate-900 placeholder:text-slate-500 focus:border-teal-500/45 focus:ring-teal-500/20';
-  const searchIconClass = isDarkTheme ? 'text-slate-500 group-focus-within:text-teal-400' : 'text-slate-400 group-focus-within:text-teal-600';
-  const inactiveCarrierClass = isDarkTheme
-    ? 'border-white/8 bg-white/[0.03] text-slate-400 hover:border-white/16 hover:bg-white/[0.06] hover:text-white'
-    : 'border-slate-300/80 bg-white/88 text-slate-600 hover:border-slate-400/80 hover:bg-white hover:text-slate-900';
-  const cardClass = isDarkTheme
-    ? 'border-white/[0.08] bg-[#0d1622]/34 hover:border-teal-400/35 hover:bg-[#142238]/48'
-    : 'border-slate-200/90 bg-white/90 hover:border-teal-500/45 hover:bg-teal-50/35';
-  const cardTitleClass = isDarkTheme ? 'text-white group-hover:text-teal-200' : 'text-slate-900 group-hover:text-teal-700';
-  const secondaryTextClass = isDarkTheme ? 'text-slate-400' : 'text-slate-600';
+  const isOledTheme = themeMode === 'dark-oled';
+  const isWarmTheme = themeMode === 'light-warm';
+  const shellClass = isWarmTheme ? 'text-[#3d3a2e]' : isDarkTheme ? 'text-slate-200' : 'text-slate-800';
+  const headerClass = isOledTheme
+    ? 'border-white/[0.06] bg-black/42 shadow-[0_18px_60px_rgba(0,0,0,0.34)]'
+    : isWarmTheme
+      ? 'border-[#cfc89f]/70 bg-[#faf7ef]/88 shadow-[0_18px_40px_rgba(89,75,48,0.12)]'
+      : isDarkTheme
+        ? 'border-white/[0.08] bg-[#07111d]/30 shadow-[0_18px_60px_rgba(0,0,0,0.16)]'
+        : 'border-slate-200/80 bg-white/96 shadow-[0_18px_40px_rgba(15,23,42,0.10)]';
+  const searchInputClass = isOledTheme
+    ? 'border-white/10 bg-white/[0.045] text-white shadow-black/30 placeholder:text-slate-500 focus:border-teal-500/40 focus:ring-teal-500/20'
+    : isWarmTheme
+      ? 'border-[#cfc89f]/90 bg-[#faf7ef]/92 text-[#3d3a2e] placeholder:text-[#736e56] focus:border-teal-500/45 focus:ring-teal-500/20'
+      : isDarkTheme
+        ? 'border-white/12 bg-[#0e1622]/34 text-white shadow-black/18 placeholder:text-slate-400/75 focus:border-teal-500/40 focus:ring-teal-500/20'
+        : 'border-slate-300/90 bg-white/90 text-slate-900 placeholder:text-slate-500 focus:border-teal-500/45 focus:ring-teal-500/20';
+  const searchIconClass = isWarmTheme ? 'text-[#918b74] group-focus-within:text-teal-600' : isDarkTheme ? 'text-slate-500 group-focus-within:text-teal-400' : 'text-slate-400 group-focus-within:text-teal-600';
+  const inactiveCarrierClass = isOledTheme
+    ? 'border-white/8 bg-white/[0.035] text-slate-400 hover:border-white/16 hover:bg-white/[0.06] hover:text-white'
+    : isWarmTheme
+      ? 'border-[#cfc89f]/80 bg-[#faf7ef]/68 text-[#736e56] hover:border-[#b7ad83] hover:bg-[#faf7ef] hover:text-[#3d3a2e]'
+      : isDarkTheme
+        ? 'border-white/8 bg-white/[0.03] text-slate-400 hover:border-white/16 hover:bg-white/[0.06] hover:text-white'
+        : 'border-slate-300/80 bg-white/88 text-slate-600 hover:border-slate-400/80 hover:bg-white hover:text-slate-900';
+  const cardClass = isOledTheme
+    ? 'border-white/[0.07] bg-white/[0.035] hover:border-teal-400/35 hover:bg-white/[0.065]'
+    : isWarmTheme
+      ? 'border-[#dcd6ba]/95 bg-[#faf7ef]/86 hover:border-teal-500/45 hover:bg-[#f2ede1]'
+      : isDarkTheme
+        ? 'border-white/[0.08] bg-[#0d1622]/34 hover:border-teal-400/35 hover:bg-[#142238]/48'
+        : 'border-slate-200/90 bg-white/90 hover:border-teal-500/45 hover:bg-teal-50/35';
+  const cardTitleClass = isWarmTheme ? 'text-[#2f2a1f] group-hover:text-teal-700' : isDarkTheme ? 'text-white group-hover:text-teal-200' : 'text-slate-900 group-hover:text-teal-700';
+  const secondaryTextClass = isWarmTheme ? 'text-[#736e56]' : isDarkTheme ? 'text-slate-400' : 'text-slate-600';
+  const closeButtonClass = isWarmTheme
+    ? 'text-[#736e56] hover:bg-[#e6e0cc]/60 hover:text-[#3d3a2e]'
+    : isDarkTheme
+      ? 'text-slate-400 hover:bg-white/5 hover:text-white'
+      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800';
+  const clearButtonClass = isWarmTheme
+    ? 'text-[#736e56] hover:bg-[#e6e0cc]/70 hover:text-[#3d3a2e]'
+    : isDarkTheme
+      ? 'text-slate-400 hover:bg-white/10 hover:text-white'
+      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800';
+  const iconEmptyClass = isWarmTheme
+    ? 'border-[#dcd6ba] bg-[#e6e0cc]/55 text-[#918b74]'
+    : isOledTheme
+      ? 'border-white/[0.05] bg-white/[0.035] text-slate-600'
+      : 'border-white/5 bg-slate-900 text-slate-600';
+  const skeletonRowClass = isOledTheme
+    ? 'border-white/[0.04] bg-white/[0.025]'
+    : isWarmTheme
+      ? 'border-[#dcd6ba] bg-[#faf7ef]/70'
+      : isDarkTheme
+        ? 'border-white/[0.03] bg-[#0d1622]/30'
+        : 'border-slate-200 bg-white/85';
+  const skeletonPrimaryClass = isWarmTheme ? 'bg-[#dad4b6]' : isDarkTheme ? 'bg-white/10' : 'bg-slate-200';
+  const skeletonSecondaryClass = isWarmTheme ? 'bg-[#e6e0cc]' : isDarkTheme ? 'bg-white/5' : 'bg-slate-100';
+  const fullListShellClass = isOledTheme
+    ? 'bg-black/96'
+    : isWarmTheme
+      ? 'bg-[#f8f2e4]/96'
+      : isDarkTheme
+        ? 'bg-[#050b12]/96'
+        : 'bg-white/96';
+  const fullListHeaderClass = isOledTheme
+    ? 'border-white/[0.06] bg-black/96'
+    : isWarmTheme
+      ? 'border-[#cfc89f]/70 bg-[#faf7ef]/98'
+      : isDarkTheme
+        ? 'border-white/[0.06] bg-[#0d1622]/96'
+        : 'border-slate-200/85 bg-white/98';
+  const fullListSearchShellClass = isOledTheme
+    ? 'border-white/[0.04] bg-black/94'
+    : isWarmTheme
+      ? 'border-[#dcd6ba]/85 bg-[#f2ede1]/96'
+      : isDarkTheme
+        ? 'border-white/[0.03] bg-[#08111c]/96'
+        : 'border-slate-200/85 bg-white/96';
 
   const handleCloseFullList = () => {
     setFullInputValue('');
@@ -283,7 +348,7 @@ export default function StopList({
             </h1>
             <p className={`mt-1 text-xs font-medium ${secondaryTextClass}`}>Znajdź najbliższe przystanki autobusowe</p>
           </div>
-          <button type="button" onClick={onClose} className={`hidden rounded-full p-2 transition-all lg:flex ${isDarkTheme ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}>
+          <button type="button" onClick={onClose} className={`hidden rounded-full p-2 transition-all lg:flex ${closeButtonClass}`}>
             <X size={20} />
           </button>
         </div>
@@ -302,7 +367,7 @@ export default function StopList({
               type="button"
               onClick={() => setInputValue('')}
               className={`absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 transition-colors ${
-                isDarkTheme ? 'text-slate-400 hover:bg-white/10 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                clearButtonClass
               }`}
               aria-label="Wyczysc wyszukiwanie"
             >
@@ -322,13 +387,13 @@ export default function StopList({
       >
         {isLoading ? (
           Array.from({ length: isFullScreen ? 6 : 4 }).map((_, index) => (
-            <div key={`stop-skeleton-${index}`} className={`flex h-[89px] items-center rounded-[22px] border p-4 ${isDarkTheme ? 'border-white/[0.03] bg-[#0d1622]/30' : 'border-slate-200 bg-white/85'}`}>
-              <div className={`mr-4 h-11 w-11 shrink-0 rounded-xl ${isDarkTheme ? 'bg-white/5' : 'bg-slate-100'}`} />
+            <div key={`stop-skeleton-${index}`} className={`flex h-[89px] items-center rounded-[22px] border p-4 ${skeletonRowClass}`}>
+              <div className={`mr-4 h-11 w-11 shrink-0 rounded-xl ${skeletonSecondaryClass}`} />
               <div className="min-w-0 flex-1 space-y-2 py-1 pr-2">
-                <div className={`h-4 w-3/4 rounded-md ${isDarkTheme ? 'bg-white/10' : 'bg-slate-200'}`} />
-                <div className={`h-3 w-1/2 rounded-md ${isDarkTheme ? 'bg-white/5' : 'bg-slate-100'}`} />
+                <div className={`h-4 w-3/4 rounded-md ${skeletonPrimaryClass}`} />
+                <div className={`h-3 w-1/2 rounded-md ${skeletonSecondaryClass}`} />
               </div>
-              <div className={`h-9 w-9 shrink-0 rounded-xl ${isDarkTheme ? 'bg-white/5' : 'bg-slate-100'}`} />
+              <div className={`h-9 w-9 shrink-0 rounded-xl ${skeletonSecondaryClass}`} />
             </div>
           ))
         ) : (
@@ -353,7 +418,7 @@ export default function StopList({
 
             {filteredStops.length === 0 && (
               <div className={`mt-16 px-4 text-center text-[15px] text-slate-500 ${isFullScreen ? 'col-span-full' : ''}`}>
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-white/5 bg-slate-900 text-slate-600">
+                <div className={`mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border ${iconEmptyClass}`}>
                   <Search size={20} />
                 </div>
                 Brak wyników dla podanej nazwy.
@@ -365,36 +430,32 @@ export default function StopList({
 
       {isFullListOpen && (
         <div
-          className={`absolute inset-0 z-50 flex min-w-0 max-w-full flex-col overflow-x-hidden backdrop-blur-2xl backdrop-saturate-150 ${
-            isDarkTheme ? 'bg-[#050b12]/96' : 'bg-white/96'
-          }`}
+          className={`absolute inset-0 z-50 flex min-w-0 max-w-full flex-col overflow-x-hidden backdrop-blur-2xl backdrop-saturate-150 ${fullListShellClass}`}
         >
-          <div className={`flex min-w-0 shrink-0 items-center justify-between border-b px-4 pb-4 pt-6 backdrop-blur-xl lg:px-6 ${isDarkTheme ? 'border-white/[0.06] bg-[#0d1622]/96' : 'border-slate-200/85 bg-white/98'}`}>
+          <div className={`flex min-w-0 shrink-0 items-center justify-between border-b px-4 pb-4 pt-6 backdrop-blur-xl lg:px-6 ${fullListHeaderClass}`}>
             <div className="min-w-0 pr-3">
-              <h2 className={`text-lg font-black lg:text-xl ${isDarkTheme ? 'text-white' : 'text-slate-900'}` }>Pełna Lista Przystanków</h2>
-              <p className={`mt-0.5 text-xs ${isDarkTheme ? 'text-slate-400' : 'text-slate-600'}` }>Wszystkie pasujące punkty komunikacyjne ({fullFilteredStops.length})</p>
+              <h2 className={`text-lg font-black lg:text-xl ${cardTitleClass}` }>Pełna Lista Przystanków</h2>
+              <p className={`mt-0.5 text-xs ${secondaryTextClass}` }>Wszystkie pasujące punkty komunikacyjne ({fullFilteredStops.length})</p>
             </div>
             <button
               type="button"
               onClick={handleCloseFullList}
               className={`cursor-pointer rounded-full p-2.5 transition-all ${
-                isDarkTheme ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                closeButtonClass
               }`}
             >
               <X size={20} />
             </button>
           </div>
 
-          <div className={`shrink-0 border-b px-4 py-4 backdrop-blur-xl lg:px-6 ${isDarkTheme ? 'border-white/[0.03] bg-[#08111c]/96' : 'border-slate-200/85 bg-white/96'}`}>
+          <div className={`shrink-0 border-b px-4 py-4 backdrop-blur-xl lg:px-6 ${fullListSearchShellClass}`}>
             <div className="group relative">
               <Search className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${searchIconClass}`} size={18} />
               <input
                 type="text"
                 placeholder="Wpisz nazwę, np. Babica, Rejtana..."
                 className={`w-full rounded-2xl border py-3 pl-11 pr-4 text-[14px] font-medium shadow-lg outline-none transition-all focus:ring-2 ${
-                  isDarkTheme
-                    ? 'border-white/10 bg-[#0e1622]/90 text-white placeholder:text-slate-500 focus:border-teal-500/40 focus:ring-teal-500/20'
-                    : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-500 focus:border-teal-500/45 focus:ring-teal-500/20'
+                  searchInputClass
                 }`}
                 value={fullInputValue}
                 onChange={(event) => {
@@ -410,7 +471,7 @@ export default function StopList({
                     setVisibleFullCountValue(40);
                   }}
                   className={`absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 transition-colors ${
-                    isDarkTheme ? 'text-slate-400 hover:bg-white/10 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                    clearButtonClass
                   }`}
                   aria-label="Wyczysc wyszukiwanie"
                 >
@@ -439,7 +500,7 @@ export default function StopList({
 
             {fullFilteredStops.length === 0 && (
               <div className="mt-16 px-4 text-center text-[15px] text-slate-500">
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border border-white/5 bg-slate-900 text-slate-600">
+                <div className={`mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border ${iconEmptyClass}`}>
                   <Search size={20} />
                 </div>
                 Brak pasujących przystanków dla tej nazwy.

@@ -2630,8 +2630,20 @@ export default function Home() {
             transition={{ type: 'spring', stiffness: 700, damping: 35 }}
             className={`absolute inset-0 z-10 overflow-hidden ${activeTab === 'stops' ? 'pointer-events-auto' : 'pointer-events-none'} ${
                transparentUI
-                 ? 'bg-slate-950/88 backdrop-blur-2xl backdrop-saturate-150 before:pointer-events-none before:absolute before:inset-0 before:bg-white/[0.025] before:content-[""]'
-                 : 'bg-[#03060a]'
+                 ? isOled
+                   ? 'bg-black/88 backdrop-blur-2xl backdrop-saturate-150 before:pointer-events-none before:absolute before:inset-0 before:bg-white/[0.018] before:content-[""]'
+                   : isWarm
+                     ? 'bg-[#f8f2e4]/92 backdrop-blur-2xl backdrop-saturate-150 before:pointer-events-none before:absolute before:inset-0 before:bg-white/[0.08] before:content-[""]'
+                     : isDark
+                       ? 'bg-slate-950/88 backdrop-blur-2xl backdrop-saturate-150 before:pointer-events-none before:absolute before:inset-0 before:bg-white/[0.025] before:content-[""]'
+                       : 'bg-white/92 backdrop-blur-2xl backdrop-saturate-150 before:pointer-events-none before:absolute before:inset-0 before:bg-white/[0.08] before:content-[""]'
+                 : isOled
+                   ? 'bg-black'
+                   : isWarm
+                     ? 'bg-[#f2ede1]'
+                     : isDark
+                       ? 'bg-[#03060a]'
+                       : 'bg-slate-50'
             }`}
             aria-hidden={activeTab !== 'stops'}
          >
@@ -2643,6 +2655,7 @@ export default function Home() {
                vehicles={vehicles}
                transparentUI={transparentUI}
                isDarkTheme={isDark}
+               themeMode={actualTheme}
                onRetry={loadStops}
                onClose={() => { if (!isMapTabDisabled) setActiveTab('map'); }}
                onToggleFavorite={toggleFavoriteStop}
