@@ -225,12 +225,53 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [registrationRetryTick, setRegistrationRetryTick] = useState(0);
   const registrationOkRef = useRef(false);
   const registrationInFlightRef = useRef(false);
+  const registrationRetryTimerRef = useRef<number | null>(null);
+  const browserOfflineTimerRef = useRef<number | null>(null);
   const scheduleRegistrationRetry = (delayMs = Capacitor.isNativePlatform() ? 5000 : 12000) => {
-    window.setTimeout(() => {
+    if (registrationRetryTimerRef.current !== null) {
+      window.clearTimeout(registrationRetryTimerRef.current);
+    }
+    registrationRetryTimerRef.current = window.setTimeout(() => {
+      registrationRetryTimerRef.current = null;
       registrationOkRef.current = false;
       setRegistrationRetryTick((value) => value + 1);
     }, delayMs);
   };
+
+  useEffect(() => {
+    return () => {
+      if (registrationRetryTimerRef.current !== null) {
+        window.clearTimeout(registrationRetryTimerRef.current);
+      }
+    };
+  }, []);
+
+  const setBrowserOfflineStable = (offline: boolean, delayMs = Capacitor.isNativePlatform() ? 8000 : 2500) => {
+    if (browserOfflineTimerRef.current !== null) {
+      window.clearTimeout(browserOfflineTimerRef.current);
+      browserOfflineTimerRef.current = null;
+    }
+
+    if (!offline) {
+      setBrowserOffline(false);
+      setNetworkStatusReady(true);
+      return;
+    }
+
+    browserOfflineTimerRef.current = window.setTimeout(() => {
+      browserOfflineTimerRef.current = null;
+      setBrowserOffline(true);
+      setNetworkStatusReady(true);
+    }, delayMs);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (browserOfflineTimerRef.current !== null) {
+        window.clearTimeout(browserOfflineTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -250,8 +291,8 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!cancelled) {
-        setBrowserOffline(isOffline);
-        setNetworkStatusReady(true);
+        setBrowserOfflineStable(isOffline);
+        if (!isOffline) setNetworkStatusReady(true);
       }
     };
 
@@ -260,8 +301,9 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
     if (Capacitor.isNativePlatform()) {
       nativeListenerPromise = import('@capacitor/network').then(({ Network }) =>
         Network.addListener('networkStatusChange', (status) => {
-          setBrowserOffline(!status.connected);
-          setNetworkStatusReady(true);
+          if (cancelled) return;
+          setBrowserOfflineStable(!status.connected);
+          if (status.connected) syncOnlineState();
         }),
       );
     }
@@ -431,7 +473,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
             ? installationSnap.data()
             : {}) as InstallationProfile;
           const roleFromProfile: DeviceRole =
-            installationProfile.role === 'owner' || installationProfile.role === 'admin'
+            installationProfile.role === 'owner' || installationProfile.role === 'admin' || installationProfile.role === 'user'
               ? installationProfile.role
               : 'user';
           const verifiedFromProfile =
@@ -599,7 +641,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
         message.includes('offline') ||
         (typeof navigator !== 'undefined' && !navigator.onLine);
       if (isNetworkProblem) {
-        setBrowserOffline(true);
+        setBrowserOfflineStable(true);
         return;
       }
       setDevice(null);

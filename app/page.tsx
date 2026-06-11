@@ -501,6 +501,7 @@ export default function Home() {
   const [isBusPanelExpanded, setIsBusPanelExpanded] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  const offlineStateTimerRef = useRef<number | null>(null);
   const [isAppForeground, setIsAppForeground] = useState<boolean>(
     typeof document === 'undefined' ? true : document.visibilityState === 'visible',
   );
@@ -548,6 +549,31 @@ export default function Home() {
   const [mapCenter, setMapCenter] = useState<[number, number] | null>(null);
   const [shouldMountMap, setShouldMountMap] = useState(false);
   const [mapVehiclesEnabled, setMapVehiclesEnabled] = useState(false);
+
+  const setOfflineStable = useCallback((offline: boolean, delayMs = Capacitor.isNativePlatform() ? 8000 : 2500) => {
+    if (offlineStateTimerRef.current !== null) {
+      window.clearTimeout(offlineStateTimerRef.current);
+      offlineStateTimerRef.current = null;
+    }
+
+    if (!offline) {
+      setIsOffline(false);
+      return;
+    }
+
+    offlineStateTimerRef.current = window.setTimeout(() => {
+      offlineStateTimerRef.current = null;
+      setIsOffline(true);
+    }, delayMs);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (offlineStateTimerRef.current !== null) {
+        window.clearTimeout(offlineStateTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isLoading) {
@@ -1411,7 +1437,7 @@ export default function Home() {
         lastPkpIntercityFetchAtRef.current = Date.now();
       }
       setError(null);
-      if (isOffline) setIsOffline(false);
+      if (isOffline) setOfflineStable(false);
     } catch (err: any) {
       if (timeoutId) clearTimeout(timeoutId);
       if (vehiclesFetchAbortRef.current?.signal.aborted) vehiclesFetchAbortRef.current = null;
@@ -1428,7 +1454,7 @@ export default function Home() {
         String(err.message || '').toLowerCase().includes('network') ||
         (typeof navigator !== 'undefined' && !navigator.onLine))
       ) {
-        setIsOffline(true);
+        setOfflineStable(true);
       }
       if (vehicles.length === 0 || force) {
         if (isPkpIntercityProviderError) {
@@ -1545,7 +1571,7 @@ export default function Home() {
 
     const applyOnlineState = async () => {
       const offline = await readOfflineState();
-      if (!cancelled) setIsOffline(offline);
+      if (!cancelled) setOfflineStable(offline);
       return offline;
     };
 
@@ -1554,14 +1580,19 @@ export default function Home() {
     if (Capacitor.isNativePlatform()) {
       nativeListenerPromise = import('@capacitor/network').then(({ Network }) =>
         Network.addListener('networkStatusChange', (status) => {
-          setIsOffline(!status.connected);
-          if (status.connected && isAppForegroundRef.current) fetchVehicles(showInactive, true);
+          if (cancelled) return;
+          setOfflineStable(!status.connected);
+          if (status.connected && isAppForegroundRef.current) {
+            applyOnlineState().then((offline) => {
+              if (!offline) fetchVehicles(showInactive, true);
+            });
+          }
         }),
       );
     }
 
     const handleOffline = () => {
-      setIsOffline(true);
+      setOfflineStable(true);
       applyOnlineState();
     };
     const handleOnline = () => {
@@ -1572,12 +1603,10 @@ export default function Home() {
     const syncOnlineState = async () => {
       const offline = await readOfflineState();
       if (cancelled) return;
-      setIsOffline((wasOffline) => {
-        if (wasOffline && !offline && isAppForegroundRef.current) {
-          fetchVehicles(showInactive, true);
-        }
-        return offline;
-      });
+      if (isOffline && !offline && isAppForegroundRef.current) {
+        fetchVehicles(showInactive, true);
+      }
+      setOfflineStable(offline);
     };
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
@@ -1594,7 +1623,7 @@ export default function Home() {
       window.clearInterval(onlineStateTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showInactive, activeProviders, hasLoadedTransportProviders]);
+  }, [showInactive, activeProviders, hasLoadedTransportProviders, isOffline, setOfflineStable]);
 
   const loadStops = () => {
     setStopsLoadError(false);

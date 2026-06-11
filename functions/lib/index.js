@@ -361,23 +361,25 @@ exports.registerDeviceIdentity = (0, https_1.onCall)(async (request) => {
                 }
             }
         }
-        // Fallback for Android reinstalls where installationId changed:
-        // restore identity only for previously privileged devices (owner/admin)
-        // matched by normalized deviceInfo. Never promote plain user this way.
+        // Fallback for Android reinstalls where local web storage or Firebase UID changed:
+        // restore the previous row matched by the same normalized native device info.
+        // The normal path above still prefers the stable installationId; this is only a
+        // recovery path for already-known devices that lost that local identity.
         if (!existingSnap.exists && !('role' in patch) && deviceInfo) {
             const sameInfoSnap = await db
                 .collection('devices')
                 .where('deviceInfo', '==', deviceInfo)
                 .limit(20)
                 .get();
-            let privilegedCandidate = null;
+            let deviceInfoCandidate = null;
+            const roleRank = (role) => (role === 'owner' ? 3 : role === 'admin' ? 2 : 1);
             for (const docSnap of sameInfoSnap.docs) {
                 const candidateUid = docSnap.id;
                 if (!candidateUid || candidateUid === uid)
                     continue;
                 const candidate = docSnap.data();
                 const candidateRole = normalizeStoredRole(candidate?.role);
-                if (candidateRole !== 'owner' && candidateRole !== 'admin')
+                if (!candidateRole)
                     continue;
                 const lastSeenMs = typeof candidate?.lastSeenAt?.toMillis === 'function'
                     ? candidate.lastSeenAt.toMillis()
@@ -392,33 +394,33 @@ exports.registerDeviceIdentity = (0, https_1.onCall)(async (request) => {
                     permissions: candidate?.permissions && typeof candidate.permissions === 'object'
                         ? candidate.permissions
                         : permissionsForRole(candidateRole),
-                    verified: true,
+                    verified: candidateRole === 'owner' || candidateRole === 'admin' || candidate?.verified === true,
                     lastSeenMs,
                     banDetails: candidate?.banDetails,
                     displayName: typeof candidate?.displayName === 'string' ? candidate.displayName : undefined,
                     deviceName: typeof candidate?.deviceName === 'string' ? candidate.deviceName : undefined,
                 };
-                if (!privilegedCandidate ||
-                    (candidateRole === 'owner' && privilegedCandidate.role !== 'owner') ||
-                    (candidateRole === privilegedCandidate.role && lastSeenMs >= privilegedCandidate.lastSeenMs)) {
-                    privilegedCandidate = nextCandidate;
+                if (!deviceInfoCandidate ||
+                    roleRank(candidateRole) > roleRank(deviceInfoCandidate.role) ||
+                    (candidateRole === deviceInfoCandidate.role && lastSeenMs >= deviceInfoCandidate.lastSeenMs)) {
+                    deviceInfoCandidate = nextCandidate;
                 }
             }
-            if (privilegedCandidate) {
-                previousUidToDeduplicate = privilegedCandidate.uid;
-                patch.role = privilegedCandidate.role;
-                patch.permissions = privilegedCandidate.permissions;
-                patch.verified = privilegedCandidate.verified;
+            if (deviceInfoCandidate) {
+                previousUidToDeduplicate = deviceInfoCandidate.uid;
+                patch.role = deviceInfoCandidate.role;
+                patch.permissions = deviceInfoCandidate.permissions;
+                patch.verified = deviceInfoCandidate.verified;
                 if (!isBlocked)
-                    patch.status = privilegedCandidate.status;
-                if (privilegedCandidate.status === 'banned' && isPlainObject(privilegedCandidate.banDetails)) {
-                    patch.banDetails = privilegedCandidate.banDetails;
+                    patch.status = deviceInfoCandidate.status;
+                if (deviceInfoCandidate.status === 'banned' && isPlainObject(deviceInfoCandidate.banDetails)) {
+                    patch.banDetails = deviceInfoCandidate.banDetails;
                 }
-                if (typeof privilegedCandidate.displayName === 'string' && privilegedCandidate.displayName.trim()) {
-                    patch.displayName = privilegedCandidate.displayName.trim().slice(0, 120);
+                if (typeof deviceInfoCandidate.displayName === 'string' && deviceInfoCandidate.displayName.trim()) {
+                    patch.displayName = deviceInfoCandidate.displayName.trim().slice(0, 120);
                 }
-                if (typeof privilegedCandidate.deviceName === 'string' && privilegedCandidate.deviceName.trim()) {
-                    patch.deviceName = privilegedCandidate.deviceName.trim().slice(0, 120);
+                if (typeof deviceInfoCandidate.deviceName === 'string' && deviceInfoCandidate.deviceName.trim()) {
+                    patch.deviceName = deviceInfoCandidate.deviceName.trim().slice(0, 120);
                 }
             }
         }
